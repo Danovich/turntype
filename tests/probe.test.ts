@@ -436,7 +436,7 @@ describe('probe: picker', () => {
     const { pane } = await openFromBand($, clock)
 
     expect(await pane.find({ type: 'Button', key: 'pick-words' })).toMatchObject({ props: { label: '☰ words (50)' } })
-    expect((await pane.find({ type: 'Button', key: 'pick-words' }))?.props['dimColor']).toBeUndefined()
+    expect((await pane.find({ type: 'Button', key: 'pick-words' }))?.props['dimColor']).toBe(false)
   })
 
   test('a turntype default changed in /config clears the saved picks, so it is the one in use', async ($, on) => {
@@ -463,7 +463,7 @@ describe('probe: picker', () => {
       await typeNextWord(pane)
     }
     expect(await isFinished(pane)).toBe(true)
-    expect((await pane.find({ type: 'Button', key: 'pick-time' }))?.props['dimColor']).toBeUndefined()
+    expect((await pane.find({ type: 'Button', key: 'pick-time' }))?.props['dimColor']).toBe(false)
     expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { label: '◷ time (60)' } })
 
     await pane.press({ key: 'again' })
@@ -485,6 +485,19 @@ describe('probe: picker', () => {
     expect(await pane.find({ type: 'Button', key: 'pick-list' })).toMatchObject({ props: { label: 'english' } })
     expect(await fieldKey(pane)).toBe('r1-f0')
     expect(world.configWrites).toEqual([])
+  })
+
+  test('flow in use: its press closes an open group and changes nothing', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+
+    await pane.press({ key: 'pick-time' })
+    expect(await pane.find({ key: 'pick-time-15' })).toBeDefined()
+    await pane.press({ key: 'pick-flow' })
+    expect(await pane.find({ key: 'pick-time-15' })).toBeUndefined()
+    expect(await fieldKey(pane)).toBe('r1-f0')
+    expect(world.saved.has('settings')).toBe(false)
   })
 
   test('in an open group the count in use is yellow text, the others dim buttons', { options: { mode: 'time' } }, async ($, on) => {
@@ -1047,7 +1060,7 @@ describe('probe: toolbar and word list', () => {
     expect(await currentWord(pane)).toMatch(/^big\d+$/)
     expect(await listRow(pane)).toEqual(['english 10k'])
     expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { label: '◷ time (60)' } })
-    expect((await pane.find({ type: 'Button', key: 'pick-time' }))?.props['dimColor']).toBeUndefined()
+    expect((await pane.find({ type: 'Button', key: 'pick-time' }))?.props['dimColor']).toBe(false)
     expect(world.saved.get('settings')).toEqual({ mode: 'time', wordCount: 25, timeSeconds: 60, wordList: 'english_10k' })
     expect(world.configWrites).toEqual([])
     void clock

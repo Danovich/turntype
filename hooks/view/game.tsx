@@ -83,31 +83,27 @@ const keyHint = ({ Text }: Pick<GameElements, 'Text'>, round: TypingRoundRunning
     <Text dimColor wrap={ONE_ROW}>esc: hide</Text>
   )
 
-/** The status after the field: `0:12  52 wpm  7 words  esc: hide`, nothing more. */
+/** The clock and live wpm of a test in play: `0:12  52 wpm`, the wpm colored against the personal best. */
+const pace = (elements: Pick<GameElements, 'Box' | 'Text'>, round: TypingRoundRunning, now: number, palette: Palette) => {
+  const activeMs = activeElapsedMs(round, now)
+  const wpm = liveWpm(round, activeMs)
+  const clock =
+    round.mode === TYPING_MODE.time ? `${formatClock(Math.max(0, round.timeLimitMs - activeMs))} left` : formatClock(activeMs)
+
+  return [stat(elements, clock, { dimColor: true }), stat(elements, `${wpm} wpm`, { color: pbColor(activeMs, wpm, round.pbWpm, palette), bold: true })]
+}
+
+/** The status after the field: `0:12  52 wpm  7 words  esc: hide`, or `paused ⋅ type to resume` in place of the pace. */
 const liveStatus = ({ Box, Text }: Pick<GameElements, 'Box' | 'Text'>, round: ActiveRound, now: number, palette: Palette) => {
   // Before the first key the field itself says "start typing"; after it, only the weak pairs, if any.
   if (round.phase === 'ready') {
     return round.focusBigrams.length > 0 ? <Text dimColor wrap={ONE_ROW}>{`your weak pairs: ${round.focusBigrams.join(' ')}`}</Text> : null
   }
-  if (isIdle(round, now)) {
-    return (
-      <Box flexDirection="row" columnGap={2}>
-        {stat({ Box, Text }, 'paused ⋅ type to resume', { dimColor: true })}
-        {stat({ Box, Text }, progressLabel(round), { dimColor: true })}
-        {keyHint({ Text }, round, palette)}
-      </Box>
-    )
-  }
-  const activeMs = activeElapsedMs(round, now)
-  const wpm = liveWpm(round, activeMs)
-  const clock =
-    round.mode === TYPING_MODE.time ? `${formatClock(Math.max(0, round.timeLimitMs - activeMs))} left` : formatClock(activeMs)
-  const color = pbColor(activeMs, wpm, round.pbWpm, palette)
+  const lead = isIdle(round, now) ? [stat({ Box, Text }, 'paused ⋅ type to resume', { dimColor: true })] : pace({ Box, Text }, round, now, palette)
 
   return (
     <Box flexDirection="row" columnGap={2}>
-      {stat({ Box, Text }, clock, { dimColor: true })}
-      {stat({ Box, Text }, `${wpm} wpm`, color === undefined ? { bold: true } : { color, bold: true })}
+      {lead}
       {stat({ Box, Text }, progressLabel(round), { dimColor: true })}
       {keyHint({ Text }, round, palette)}
     </Box>
@@ -133,7 +129,7 @@ export const gameView = (elements: GameElements, round: ActiveRound, props: Game
       <Box flexDirection="column" rowGap={ROW_GAP}>
         {lines.map(line => (
           <Box flexDirection="row">
-            {line.length === 0 ? <Text> </Text> : line.map(run => (run.isInErrorWord ? <Text {...letterProps[run.style]} underline>{run.text}</Text> : <Text {...letterProps[run.style]}>{run.text}</Text>))}
+            {line.length === 0 ? <Text> </Text> : line.map(run => <Text {...letterProps[run.style]} underline={run.isInErrorWord}>{run.text}</Text>)}
           </Box>
         ))}
       </Box>

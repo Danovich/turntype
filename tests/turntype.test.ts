@@ -224,7 +224,7 @@ describe('turntype', () => {
       const pane = await $.ui.mount({ plugin: 'turntype', surface, component: 'Pane', requestId: 'turntype', props: PANE_PROPS })
 
       // Closed: flow in use (bright), time and words dim with their counts, no counts on show.
-      expect((await pane.find({ type: 'Button', key: 'pick-flow' }))?.props['dimColor']).toBeUndefined()
+      expect((await pane.find({ type: 'Button', key: 'pick-flow' }))?.props['dimColor']).toBe(false)
       expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { label: '◷ time (30)', dimColor: true } })
       expect(await pane.find({ type: 'Button', key: 'pick-time-15' })).toBeUndefined()
 

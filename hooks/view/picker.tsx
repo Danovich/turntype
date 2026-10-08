@@ -60,11 +60,7 @@ const optionGroup = (
 
   return (
     <Box flexDirection="row" columnGap={2} flexShrink={0}>
-      {isInUse ? (
-        <Button key={key} label={label} plain onPress={onToggle} />
-      ) : (
-        <Button key={key} label={label} plain dimColor onPress={onToggle} />
-      )}
+      <Button key={key} label={label} plain dimColor={!isInUse} onPress={onToggle} />
       {isOpen && options}
     </Box>
   )
@@ -82,8 +78,15 @@ export const settingsPicker = (elements: PickerElements, props: PickerProps, act
   const { Box, Button, Text } = elements
   const { settings, palette, openOptions, wordListNames } = props
   const choose = (change: Partial<TypingSettings>) => () => actions.onChoose({ ...settings, ...change })
+  const isFlow = settings.mode === TYPING_MODE.flow
   const isTime = settings.mode === TYPING_MODE.time
   const isWords = settings.mode === TYPING_MODE.words
+  // Flow in use has nothing to pick: its press closes an open group instead.
+  const closeOpen = () => {
+    if (openOptions !== null) {
+      actions.onToggle(openOptions)
+    }
+  }
 
   const listOptions = wordListOrder(wordListNames)
     .filter(name => name !== settings.wordList)
@@ -102,11 +105,7 @@ export const settingsPicker = (elements: PickerElements, props: PickerProps, act
         {optionGroup(elements, 'pick-list', fullListLabel(settings.wordList), true, openOptions === 'list', () => actions.onToggle('list'), listOptions)}
       </Box>
       <Text dimColor>❘</Text>
-      {settings.mode === TYPING_MODE.flow ? (
-        <Button key="pick-flow" label={`${MODE_ICON.flow} flow`} plain onPress={() => {}} />
-      ) : (
-        <Button key="pick-flow" label={`${MODE_ICON.flow} flow`} plain dimColor onPress={choose({ mode: TYPING_MODE.flow })} />
-      )}
+      <Button key="pick-flow" label={`${MODE_ICON.flow} flow`} plain dimColor={!isFlow} onPress={isFlow ? closeOpen : choose({ mode: TYPING_MODE.flow })} />
       {optionGroup(
         elements,
         'pick-time',
