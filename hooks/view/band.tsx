@@ -76,9 +76,9 @@ export const invitationBand = (elements: BandElements, round: ActiveRound, daily
   const { Box, Text } = elements
 
   return goalText === undefined ? invitation : (
-    <Box flexDirection="row" columnGap={3}>
+    <Box flexDirection="row" columnGap={1}>
       {invitation}
-      <Text dimColor>{goalText}</Text>
+      <Text dimColor>{`⋅ ${goalText}`}</Text>
     </Box>
   )
 }
