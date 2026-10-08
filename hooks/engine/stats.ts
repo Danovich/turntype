@@ -1,4 +1,12 @@
-import type { TypingCharCounts, TypingResult, TypingRoundEnding, TypingRoundRunning, TypingSampleTotals, TypingScored } from '../../types'
+import type {
+  TypingCharCounts,
+  TypingCurrentSecond,
+  TypingResult,
+  TypingRoundEnding,
+  TypingRoundRunning,
+  TypingSampleTotals,
+  TypingScored,
+} from '../../types'
 
 import { timeLimitMs } from './timing'
 
@@ -19,13 +27,35 @@ export const totalSamples = (samples: readonly number[]): TypingSampleTotals => 
   sumOfSquares: samples.reduce((sum, value) => sum + value * value, 0),
 })
 
+/**
+ * A key at active second `index`: counted in the current second, or, in a later one, the seconds
+ * before it are finished (those with no key as 0) and it starts the new current second.
+ */
+export const addToSecond = (
+  totals: TypingSampleTotals,
+  current: TypingCurrentSecond,
+  index: number,
+  keystrokes: number,
+): { readonly secondTotals: TypingSampleTotals; readonly currentSecond: TypingCurrentSecond } =>
+  index <= current.index
+    ? { secondTotals: totals, currentSecond: { index: current.index, keystrokes: current.keystrokes + keystrokes } }
+    : {
+        // The current second, then the seconds between with no key.
+        secondTotals: addSampleTotals(totals, {
+          count: index - current.index,
+          sum: current.keystrokes,
+          sumOfSquares: current.keystrokes * current.keystrokes,
+        }),
+        currentSecond: { index, keystrokes },
+      }
+
 export const addSampleTotals = (first: TypingSampleTotals, second: TypingSampleTotals): TypingSampleTotals => ({
   count: first.count + second.count,
   sum: first.sum + second.sum,
   sumOfSquares: first.sumOfSquares + second.sumOfSquares,
 })
 
-/** Consistency of the per-second pace from the totals: the same with folded seconds as with all of them. */
+/** Consistency of the per-second pace from the totals: the same as from every second's count. */
 const consistencyOf = (samples: TypingSampleTotals): number => {
   if (samples.count === 0 || samples.sum === 0) {
     return 0
@@ -99,7 +129,6 @@ export const EMPTY_SCORED: TypingScored = {
   words: 0,
   chars: { correct: 0, incorrect: 0, extra: 0, missed: 0 },
   correctWordCharacters: 0,
-  bigramAttempts: {},
 }
 
 /** Adds committed words to the totals, each scored against its target: once per word, when its space is typed. */
@@ -116,7 +145,6 @@ export const addScoredWords = (scored: TypingScored, typedWords: readonly string
           },
           { chars: scored.chars, correctWordCharacters: scored.correctWordCharacters },
         ),
-        bigramAttempts: addBigramAttempts(scored.bigramAttempts, targetWords.slice(0, typedWords.length)),
       }
 
 /**
@@ -144,7 +172,7 @@ export const calculateResult = (round: TypingRoundRunning, ending: TypingRoundEn
     raw: Math.round(wordsPerMinute(keystrokes, durationMs)),
     accuracy: keystrokes === 0 ? 0 : Math.round((round.correctKeystrokes / keystrokes) * 100),
     // Scaling every sample (to raw wpm) leaves the ratio of spread to mean as it is.
-    consistency: Math.round(consistencyOf(addSampleTotals(round.foldedSamples, totalSamples(round.keystrokesPerSecond)))),
+    consistency: Math.round(consistencyOf(addSampleTotals(round.secondTotals, totalSamples([round.currentSecond.keystrokes])))),
     chars: addCharCounts(scored.chars, currentScore),
     durationMs,
     wordCount: scored.words + (currentWord === '' ? 0 : 1),

@@ -176,8 +176,12 @@ const reachedInCurrentWord = (round: TypingRoundFinished): string =>
 
 /** Weighs the old counts down and adds this test's; a pair that fades below one attempt is dropped. */
 const mergeBigrams = (bigrams: StoredProgress['bigrams'], round: TypingRoundFinished): StoredProgress['bigrams'] => {
-  // Every pair reached is one attempt: the committed words' counted when committed, and the current word's so far.
-  const attempts = addBigramAttempts(round.scored.bigramAttempts, [reachedInCurrentWord(round)])
+  // Every pair reached is one attempt: the words that left the window counted as they left, then the
+  // window's committed targets and the current word's so far.
+  const attempts = addBigramAttempts(round.droppedBigramAttempts, [
+    ...round.targetWords.slice(0, round.typedWords.length),
+    reachedInCurrentWord(round),
+  ])
   const keys = new Set([...Object.keys(bigrams), ...Object.keys(attempts), ...Object.keys(round.bigramErrors)])
 
   return Object.fromEntries(

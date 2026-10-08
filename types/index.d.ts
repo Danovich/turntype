@@ -35,7 +35,7 @@ export type TypingResult = {
   readonly wordCount: number
 }
 
-/** Keystrokes-per-second samples folded out of the window: enough for their mean and spread. */
+/** Keystrokes-per-second samples as totals: enough for their mean and spread. */
 export type TypingSampleTotals = {
   readonly count: number
   readonly sum: number
@@ -51,8 +51,12 @@ export type TypingScored = {
   readonly chars: TypingCharCounts
   /** Characters of the correctly committed words, with their spaces: what wpm is calculated from. */
   readonly correctWordCharacters: number
-  /** Letter pairs of the committed target words: one attempt each. */
-  readonly bigramAttempts: Readonly<Record<string, number>>
+}
+
+/** The active second being typed in, and its counted keystrokes so far: added to the totals once a later second starts. */
+export type TypingCurrentSecond = {
+  readonly index: number
+  readonly keystrokes: number
 }
 
 export type TypingRoundBase = {
@@ -102,15 +106,16 @@ export type TypingRoundRunning = TypingRoundBase & {
   readonly pausedMs: number
   readonly correctKeystrokes: number
   readonly incorrectKeystrokes: number
-  /** Counted keystrokes in each active second since the start, less the seconds folded into `foldedSamples`. */
-  readonly keystrokesPerSecond: readonly number[]
+  /** Counted keystrokes of each finished active second, as totals; a second with no key counts as 0. */
+  readonly secondTotals: TypingSampleTotals
+  readonly currentSecond: TypingCurrentSecond
   /** Wrong keys per expected letter pair ("th": an "h" after a "t" was missed), counted when pressed. */
   readonly bigramErrors: Readonly<Record<string, number>>
   /** One change of the field added more text than a person types at once: a paste, not typing. */
   readonly hasPastedText: boolean
   readonly scored: TypingScored
-  /** The oldest seconds of `keystrokesPerSecond`, folded into totals so a long test stays small. */
-  readonly foldedSamples: TypingSampleTotals
+  /** Letter pairs of the target words that left the window, one attempt each; the window's are counted at the end. */
+  readonly droppedBigramAttempts: Readonly<Record<string, number>>
 }
 
 /** complete: the test reached its end. timeUp: a time test ran out. early: the player ended it first. */
@@ -146,7 +151,7 @@ export type TypingRoundFinished = TypingRoundBase & {
   readonly bigramErrors: Readonly<Record<string, number>>
   readonly hasPastedText: boolean
   readonly scored: TypingScored
-  readonly foldedSamples: TypingSampleTotals
+  readonly droppedBigramAttempts: Readonly<Record<string, number>>
   /** Added once the result is saved; undefined until then, or when the store failed. */
   readonly progress: TypingProgressSummary | undefined
 }

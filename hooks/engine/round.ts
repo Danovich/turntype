@@ -10,7 +10,7 @@ import type {
 
 import { isEndless, MODES } from './modes'
 import { countOf } from './settings'
-import { addScoredWords, calculateResult, EMPTY_SCORED } from './stats'
+import { addScoredWords, addToSecond, calculateResult, EMPTY_SCORED } from './stats'
 import { activeElapsedMs, isTimeUp, pausedPartOfGap } from './timing'
 import { parseTyped } from './typed-text'
 import { droppedWords, trimWindow } from './window'
@@ -24,9 +24,10 @@ export const ROUND_ENDING = {
 } as const satisfies Record<TypingRoundEnding, TypingRoundEnding>
 
 /** The version of the round's shape: raised whenever its fields change, so a round kept over a reload from another version is dropped. */
-export const ROUND_SHAPE = 3
+export const ROUND_SHAPE = 4
 
 const EMPTY_SAMPLES = { count: 0, sum: 0, sumOfSquares: 0 } as const
+const FIRST_SECOND = { index: 0, keystrokes: 0 } as const
 
 const INITIAL_ENDLESS_WORDS = 40
 const LOOKAHEAD_WORDS = 20
@@ -127,11 +128,6 @@ const tallyAppended = (committedCount: number, currentWord: string, appended: st
   }, initial)
 }
 
-const addToSecond = (perSecond: readonly number[], secondIndex: number, count: number): readonly number[] =>
-  Array.from({ length: Math.max(perSecond.length, secondIndex + 1) }, (_, index) =>
-    (perSecond[index] ?? 0) + (index === secondIndex ? count : 0),
-  )
-
 const addBigramErrors = (
   bigramErrors: Readonly<Record<string, number>>,
   missedBigrams: readonly string[],
@@ -161,7 +157,7 @@ export const finishRound = (round: TypingRoundRunning, ending: TypingRoundEnding
   bigramErrors: round.bigramErrors,
   hasPastedText: round.hasPastedText,
   scored: round.scored,
-  foldedSamples: round.foldedSamples,
+  droppedBigramAttempts: round.droppedBigramAttempts,
   result: calculateResult(round, ending),
   progress: undefined,
 })
@@ -342,24 +338,22 @@ export const applyFieldInput = (
     pausedMs,
     correctKeystrokes: (started?.correctKeystrokes ?? 0) + tally.correct,
     incorrectKeystrokes: (started?.incorrectKeystrokes ?? 0) + tally.incorrect,
-    // Appending adds to the count; a deletion can remove a committed space, so count again.
     // Each word committed by this change, scored once: it is final from here on.
     scored: addScoredWords(
       started?.scored ?? EMPTY_SCORED,
       typedWords.slice(previousWords.length),
       round.targetWords.slice(previousWords.length),
     ),
-    keystrokesPerSecond: started?.keystrokesPerSecond ?? [],
     bigramErrors: addBigramErrors(started?.bigramErrors ?? {}, tally.missedBigrams),
     hasPastedText: (started?.hasPastedText ?? false) || appended.length > MAX_CHARACTERS_PER_INPUT,
-    foldedSamples: started?.foldedSamples ?? EMPTY_SAMPLES,
+    droppedBigramAttempts: started?.droppedBigramAttempts ?? {},
+    secondTotals: started?.secondTotals ?? EMPTY_SAMPLES,
+    currentSecond: started?.currentSecond ?? FIRST_SECOND,
   }
   // Samples go to active seconds, so a pause adds no empty seconds to the consistency.
-  // The array starts after the folded seconds.
-  const secondIndex = Math.floor(activeElapsedMs(running, now) / 1000) - running.foldedSamples.count
   const sampled: TypingRoundRunning = {
     ...running,
-    keystrokesPerSecond: addToSecond(running.keystrokesPerSecond, secondIndex, keystrokes),
+    ...addToSecond(running.secondTotals, running.currentSecond, Math.floor(activeElapsedMs(running, now) / 1000), keystrokes),
   }
 
   // The mode's own end: its last word, or Claude done and the word completed.

@@ -1,6 +1,6 @@
 import type { TypingRound, TypingRoundRunning } from '../../types'
 
-import { addSampleTotals, totalSamples } from './stats'
+import { addBigramAttempts } from './stats'
 
 /**
  * The window: a flow test lasts as long as the turn, and a session can last days. Each committed
@@ -15,8 +15,6 @@ const DROP_AT_CHARACTERS = 5000
  * Counted in characters, not words, because a line is a number of columns, whatever the words.
  */
 const KEEP_CHARACTERS = 2500
-const FOLD_AT_SECONDS = 120
-const KEEP_SECONDS = 60
 
 /** Committed words that left the window: counted in `scored`, no longer in `typedWords`. None before the first key. */
 export const droppedWords = (round: TypingRound): number => (round.phase === 'ready' ? 0 : round.scored.words - round.typedWords.length)
@@ -29,10 +27,11 @@ const committedLength = (typedWords: readonly string[], wordCount: number): numb
   typedWords.slice(0, wordCount).reduce((sum, word) => sum + word.length + 1, 0)
 
 /**
- * Drops the oldest committed words of a long round: they are scored already, so this is a cut.
- * Only words wholly in the field's base: the field never changes them again.
+ * Drops the oldest committed words of a long round: they are scored already, and only their target
+ * letter pairs are kept, as attempts. Only words wholly in the field's base: the field never changes
+ * them again. Once per committed word; the same round while the window is short.
  */
-const dropWords = (round: TypingRoundRunning): TypingRoundRunning => {
+export const trimWindow = (round: TypingRoundRunning): TypingRoundRunning => {
   const baseLength = committedLength(round.typedWords, round.fieldBaseWords) + round.fieldBasePartial
   // The common case, after every word: one sum, nothing more.
   if (baseLength <= DROP_AT_CHARACTERS) {
@@ -58,22 +57,6 @@ const dropWords = (round: TypingRoundRunning): TypingRoundRunning => {
         typedWords: round.typedWords.slice(dropCount),
         fieldBaseWords: round.fieldBaseWords - dropCount,
         targetWords: round.targetWords.slice(dropCount),
+        droppedBigramAttempts: addBigramAttempts(round.droppedBigramAttempts, round.targetWords.slice(0, dropCount)),
       }
 }
-
-/** Folds the oldest per-second samples. Active time only grows, so a folded second is never written again. */
-const foldSamples = (round: TypingRoundRunning): TypingRoundRunning => {
-  if (round.keystrokesPerSecond.length <= FOLD_AT_SECONDS) {
-    return round
-  }
-  const foldCount = round.keystrokesPerSecond.length - KEEP_SECONDS
-
-  return {
-    ...round,
-    keystrokesPerSecond: round.keystrokesPerSecond.slice(foldCount),
-    foldedSamples: addSampleTotals(round.foldedSamples, totalSamples(round.keystrokesPerSecond.slice(0, foldCount))),
-  }
-}
-
-/** Keeps a running round bounded: drops old words and folds old samples once there are enough of them; else the same round. */
-export const trimWindow = (round: TypingRoundRunning): TypingRoundRunning => foldSamples(dropWords(round))

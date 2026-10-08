@@ -14,7 +14,7 @@ import { bandKind, keepsRound, readableRound, roundAfter } from '../hooks/engine
 import { bigNumberRows } from '../hooks/engine/big-digits'
 import { resultToast } from '../hooks/view/shared'
 import { droppedWords, trimWindow } from '../hooks/engine/window'
-import { addScoredWords, EMPTY_SCORED, scoreWord, totalSamples } from '../hooks/engine/stats'
+import { addScoredWords, addToSecond, EMPTY_SCORED, scoreWord, totalSamples } from '../hooks/engine/stats'
 
 const READY: TypingRoundReady = {
   shape: ROUND_SHAPE,
@@ -191,7 +191,8 @@ describe('engine', () => {
     expect(afterBreak.pausedMs).toBe(60_000)
     // Active time is 6 s, so the samples span 7 active seconds, not 67 wall seconds.
     expect(activeElapsedMs(afterBreak, 66_000)).toBe(6000)
-    expect(afterBreak.keystrokesPerSecond).toHaveLength(7)
+    expect(afterBreak.secondTotals.count).toBe(6)
+    expect(afterBreak.currentSecond.index).toBe(6)
     expect(finishRound(afterBreak, ROUND_ENDING.complete).result.wpm).toBe(20)
   })
 
@@ -295,7 +296,7 @@ const finished = (overrides: Partial<TypingRoundFinished['result']>, round: Part
   bigramErrors: {},
   hasPastedText: false,
   scored: addScoredWords(EMPTY_SCORED, typedWords, targetWords),
-  foldedSamples: totalSamples([]),
+  droppedBigramAttempts: {},
   progress: undefined,
   result: {
     wpm: 60,
@@ -695,9 +696,6 @@ describe('window', () => {
       missed: sum(score => score.missed),
     })
     expect(typed.scored.correctWordCharacters).toBe(sum(score => score.correctWordCharacters))
-    // Each committed target counts its pairs once: "al" once per "alpha", "be" once per "be".
-    const targets = LONG_WORDS.slice(0, 300)
-    expect(typed.scored.bigramAttempts).toMatchObject({ al: countOf(targets, 'alpha'), be: countOf(targets, 'be') })
   })
 
   test('up to 5000 characters of committed text the round is returned as it is', async () => {
@@ -720,15 +718,21 @@ describe('window', () => {
     expect(trimmed.typedWords).toEqual(running.typedWords.slice(dropped))
     expect(trimmed.fieldBaseWords).toBe(running.fieldBaseWords - dropped)
     expect(trimmed.scored).toBe(running.scored)
+    // Each target that left counts its pairs once: "al" once per "alpha", "be" once per "be".
+    const droppedTargets = LONG_WORDS.slice(0, dropped)
+    expect(trimmed.droppedBigramAttempts).toMatchObject({ al: countOf(droppedTargets, 'alpha'), be: countOf(droppedTargets, 'be') })
   })
 
-  test('old per-second samples fold into totals with the same mean and spread', async () => {
-    const samples = Array.from({ length: 130 }, (_, index) => index % 7)
-    const running: TypingRoundRunning = { ...asRunning(typeEvenly(READY_LONG, 'alpha ', 0, 10)), keystrokesPerSecond: samples }
-    const folded = trimWindow(running)
+  test('per-second samples as totals: a later second finishes the ones before it, those with no key as 0', async () => {
+    // Keys in seconds 0, 0, 1, then 4: seconds 2 and 3 had none.
+    const first = addToSecond(totalSamples([]), { index: 0, keystrokes: 0 }, 0, 2)
+    const second = addToSecond(first.secondTotals, first.currentSecond, 0, 1)
+    const third = addToSecond(second.secondTotals, second.currentSecond, 1, 4)
+    const fourth = addToSecond(third.secondTotals, third.currentSecond, 4, 5)
 
-    expect(folded.keystrokesPerSecond).toEqual(samples.slice(70))
-    expect(folded.foldedSamples).toEqual(totalSamples(samples.slice(0, 70)))
+    expect(second.currentSecond).toEqual({ index: 0, keystrokes: 3 })
+    expect(fourth.secondTotals).toEqual(totalSamples([3, 4, 0, 0]))
+    expect(fourth.currentSecond).toEqual({ index: 4, keystrokes: 5 })
   })
 })
 
@@ -748,8 +752,8 @@ describe('long flow', () => {
       ...windowed,
       ...wordsOf(text),
       targetWords: LONG_WORDS,
-      keystrokesPerSecond: allSamples,
-      foldedSamples: totalSamples([]),
+      secondTotals: totalSamples(allSamples.slice(0, -1)),
+      currentSecond: { index: allSamples.length - 1, keystrokes: allSamples.at(-1) ?? 0 },
       scored: addScoredWords(EMPTY_SCORED, wordsOf(text).typedWords, LONG_WORDS),
     }
 
