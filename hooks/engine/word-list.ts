@@ -35,40 +35,9 @@ const WORD_PATTERN = /^[^\s\p{Cc}]+$/u
 
 export const isWordListName = (name: string): boolean => LIST_NAME_PATTERN.test(name)
 
-/** A size variant of another list (`english_10k` of `english`): its base and its suffix. */
-const VARIANT_PATTERN = /^(.+)_([^_]+)$/
-
-const variantOf = (name: string, names: readonly string[]): { readonly base: string; readonly suffix: string } | undefined => {
-  const match = VARIANT_PATTERN.exec(name)
-
-  return match?.[1] !== undefined && match[2] !== undefined && names.includes(match[1]) ? { base: match[1], suffix: match[2] } : undefined
-}
-
-/** The list's name in the toolbar: a variant of a list on show is its suffix alone (`10k`), so the row stays short. */
-export const wordListLabel = (name: string, names: readonly string[]): string => variantOf(name, names)?.suffix ?? name
-
-/**
- * The lists in toolbar order: the default list's family first, each family its base then its
- * variants smallest first (`english 1k 5k 10k`), then the other families by name (`code`).
- */
-export const wordListOrder = (names: readonly string[]): readonly string[] => {
-  const sortKey = (name: string) => {
-    const variant = variantOf(name, names)
-    const base = variant?.base ?? name
-
-    return { isDefault: base === DEFAULT_WORD_LIST ? 0 : 1, base, size: variant === undefined ? 0 : Number.parseFloat(variant.suffix) || Infinity }
-  }
-
-  return names.toSorted((first, second) => {
-    const [a, b] = [sortKey(first), sortKey(second)]
-
-    return a.isDefault - b.isDefault || a.base.localeCompare(b.base) || a.size - b.size || first.localeCompare(second)
-  })
-}
-
-/** The list a person named: its full name, or its toolbar label (`10k`); undefined when none. */
-export const findWordListName = (token: string, names: readonly string[]): string | undefined =>
-  names.find(name => name === token) ?? names.find(name => wordListLabel(name, names) === token)
+/** The lists in toolbar order: by name, numbers in natural order (`english_1k`, `english_5k`, `english_10k`). */
+export const wordListOrder = (names: readonly string[]): readonly string[] =>
+  names.toSorted((first, second) => first.localeCompare(second, 'en', { numeric: true }))
 
 /**
  * Reads a list file's content. Words that cannot be typed (empty, with a space, too long, not a

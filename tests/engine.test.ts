@@ -2,10 +2,10 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { TypingRound, TypingRoundFinished, TypingRoundReady, TypingRoundRunning } from '../types'
 import { applyProgressChanges, EMPTY_PROGRESS, parseLegacyProgress, progressChanges, recordResult, sparkline, weakBigrams } from '../hooks/engine/progress'
-import { FALLBACK_WORD_LIST, findWordListName, parseWordList, pickWords, wordListLabel, wordListOrder } from '../hooks/engine/word-list'
+import { FALLBACK_WORD_LIST, parseWordList, pickWords, wordListOrder } from '../hooks/engine/word-list'
 import { applyFieldInput, createRound, expireRound, finishByPlayer, finishRound, ROUND_ENDING } from '../hooks/engine/round'
-import { DEFAULT_SETTINGS, parseSavedPicks, parseTypeArguments, parseTypingSettings } from '../hooks/engine/settings'
-import { COUNTED_MODES, MODES, TYPE_ARGUMENT_HINT } from '../hooks/engine/modes'
+import { DEFAULT_SETTINGS, parseSavedPicks, parseTypingSettings } from '../hooks/engine/settings'
+import { COUNTED_MODES, MODES } from '../hooks/engine/modes'
 import { calculateResult, kogasa, liveWpm } from '../hooks/engine/stats'
 import { activeElapsedMs, isIdle } from '../hooks/engine/timing'
 import { parseTyped } from '../hooks/engine/typed-text'
@@ -244,11 +244,10 @@ describe('engine', () => {
     })
   })
 
-  test('the mode table: every count belongs to one mode, and the /type hint is built from it', async () => {
+  test('the mode table: every count belongs to one mode, and each default is one of its counts', async () => {
     const presets = COUNTED_MODES.flatMap(mode => [...MODES[mode].count.presets])
     expect(new Set(presets).size).toBe(presets.length)
     expect(COUNTED_MODES.every(mode => MODES[mode].count.presets.includes(MODES[mode].count.default))).toBe(true)
-    expect(TYPE_ARGUMENT_HINT).toBe('[list] [flow | time 15–120 | words 10–100]')
   })
 })
 
@@ -477,30 +476,10 @@ describe('round lifecycle', () => {
   })
 })
 
-describe('word list names and /type', () => {
-  const NAMES = ['english', 'code', 'english_10k', 'english_1k', 'english_5k', 'german', 'german_1k', 'spare_parts']
-
-  test('the toolbar order: english and its sizes smallest first, then the others by name', async () => {
-    expect(wordListOrder(NAMES)).toEqual(['english', 'english_1k', 'english_5k', 'english_10k', 'code', 'german', 'german_1k', 'spare_parts'])
-  })
-
-  test('a size of a list on show is labelled by its suffix; any other name stays whole', async () => {
-    expect(NAMES.map(name => wordListLabel(name, NAMES))).toEqual(['english', 'code', '10k', '1k', '5k', 'german', '1k', 'spare_parts'])
-    // Labels can repeat across families: a name is found by its full name first, then by the first label.
-    expect(findWordListName('german_1k', NAMES)).toBe('german_1k')
-    expect(findWordListName('10k', NAMES)).toBe('english_10k')
-    expect(findWordListName('nope', NAMES)).toBeUndefined()
-  })
-
-  test('/type arguments in any order: a mode, a count that names its mode, a list', async () => {
-    const parse = (args: string) => parseTypeArguments(args, DEFAULT_SETTINGS, NAMES)
-
-    expect(parse('')).toEqual({ isValid: true, settings: DEFAULT_SETTINGS })
-    expect(parse('code')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, wordList: 'code' } })
-    expect(parse('10k time 60')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, mode: 'time', counts: { time: 60, words: 25 }, wordList: 'english_10k' } })
-    expect(parse('50')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, mode: 'words', counts: { time: 30, words: 50 } } })
-    expect(parse('Words')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, mode: 'words' } })
-    expect(parse('time 45')).toEqual({ isValid: false, error: 'unknown "45"' })
+describe('word list order', () => {
+  test('the lists show by their file names, in name order, numbers in natural order', async () => {
+    const names = ['english', 'code', 'english_10k', 'english_1k', 'english_5k', 'german']
+    expect(wordListOrder(names)).toEqual(['code', 'english', 'english_1k', 'english_5k', 'english_10k', 'german'])
   })
 })
 

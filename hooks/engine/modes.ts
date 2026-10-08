@@ -3,8 +3,7 @@ import type { TypingCountedMode, TypingMode } from '../../types'
 /**
  * The one place that knows the game's modes and the settings a person picks: each mode's rules,
  * its counts and their defaults, and the default mode and word list. Everything else derives from
- * it: the defaults, the toolbar's groups, `/type` and its hint, labels, personal-best keys, the end
- * of a test. It imports no code: a type only, which the compiler holds to the table both ways.
+ * it: the defaults, the toolbar's groups, labels, personal-best keys, the end of a test. It imports no code: a type only, which the compiler holds to the table both ways.
  */
 
 /** What ends a test of the mode on its own. */
@@ -61,16 +60,5 @@ export const DEFAULT_COUNTS = Object.fromEntries(COUNTED_MODES.map(mode => [mode
   Record<TypingCountedMode, number>
 >
 
-/** The mode a count belongs to: no two modes share a preset, so `/type 60` is time 60. */
-export const modeOfCount = (count: number): TypingCountedMode | undefined =>
-  COUNTED_MODES.find(mode => MODES[mode].count.presets.includes(count))
-
 /** Words keep coming as the player types, unless the mode ends on its last word. */
 export const isEndless = (mode: TypingMode): boolean => MODES[mode].endsWhen !== 'lastWord'
-
-/** `/type`'s argument hint: `[list] [flow | time 15–120 | words 10–100]`. */
-export const TYPE_ARGUMENT_HINT = `[list] [${TYPING_MODES.map(mode => {
-  const count = MODES[mode].count
-
-  return count === undefined ? mode : `${mode} ${count.presets[0]}–${count.presets.at(-1)}`
-}).join(' | ')}]`

@@ -1,6 +1,6 @@
 import type { TypingCountedMode, TypingMode, TypingSettings } from '../../types'
 import { isCountedMode, MODES, TYPING_MODES } from '../engine/modes'
-import { wordListLabel, wordListOrder } from '../engine/word-list'
+import { wordListOrder } from '../engine/word-list'
 import type { Palette } from './palette'
 import type { GameElements } from './shared'
 
@@ -28,9 +28,6 @@ export type PickerActions = {
   /** Opens a group's options, or closes them when they are open; chooses nothing. */
   readonly onToggle: (group: Exclude<OpenOptions, null>) => void
 }
-
-/** The list's full name for the closed toolbar: a size reads as its family and size (`english 1k`). */
-const fullListLabel = (name: string): string => name.replaceAll('_', ' ')
 
 /** One option to pick: the one in use yellow text (pressing it would change nothing), any other a dim button. */
 const pickOption = ({ Box, Button, Text }: PickerElements, palette: Palette, key: string, label: string, isSelected: boolean, onPick: () => void) =>
@@ -87,7 +84,7 @@ export const settingsPicker = (elements: PickerElements, props: PickerProps, act
 
   const listOptions = wordListOrder(wordListNames)
     .filter(name => name !== settings.wordList)
-    .map(name => pickOption(elements, palette, `pick-list-${name}`, wordListLabel(name, wordListNames), false, choose({ wordList: name })))
+    .map(name => pickOption(elements, palette, `pick-list-${name}`, name, false, choose({ wordList: name })))
 
   const modeItem = (mode: TypingMode) => {
     const label = `${MODE_ICON[mode]} ${mode}`
@@ -115,7 +112,7 @@ export const settingsPicker = (elements: PickerElements, props: PickerProps, act
     <Box flexDirection="row" columnGap={2}>
       <Box flexDirection="row" columnGap={1} flexShrink={0}>
         <Text dimColor>{LIST_ICON}</Text>
-        {optionGroup(elements, 'pick-list', fullListLabel(settings.wordList), true, openOptions === 'list', () => actions.onToggle('list'), listOptions)}
+        {optionGroup(elements, 'pick-list', settings.wordList, true, openOptions === 'list', () => actions.onToggle('list'), listOptions)}
       </Box>
       <Text dimColor>❘</Text>
       {TYPING_MODES.map(modeItem)}

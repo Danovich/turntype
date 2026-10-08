@@ -6,13 +6,13 @@ import type { ActiveRound, GameElements } from './shared'
 type BandElements = Pick<GameElements, 'Box' | 'Button' | 'Text'>
 
 /**
- * `press 1: <label>`: a plain Button always draws as `<hotkey>: <label>`, so the dim "press" goes
- * before it. Its `1` also fires from an empty prompt.
+ * `press 1: <label>`: what to press bright, what it does dim. A plain Button always draws as
+ * `<hotkey>: <label>`, so "press" goes before it. Its `1` also fires from an empty prompt.
  */
 const pressOne = ({ Box, Button, Text }: BandElements, key: string, label: string, onPress: () => void) => (
   <Box flexDirection="row" columnGap={1}>
-    <Text dimColor>press</Text>
-    <Button key={key} label={label} hotkey="1" plain onPress={onPress} />
+    <Text>press</Text>
+    <Button key={key} label={label} hotkey="1" plain dimColor onPress={onPress} />
   </Box>
 )
 

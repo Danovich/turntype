@@ -447,27 +447,6 @@ describe('probe: picker', () => {
     expect((await pane.find({ type: 'Button', key: 'pick-words' }))?.props['dimColor']).toBe(false)
   })
 
-  test('the result card marks what "again" starts: settings changed during the test, not the test played', async ($, on) => {
-    const clock = mock.clock(on)
-    stubWorld(on, picks({ mode: 'words', words: 10 }))
-    await $.session.start(SESSION)
-    const { pane } = await openFromBand($, clock)
-    await typeNextWord(pane)
-
-    // During the test: /type changes the settings; the test in progress keeps its own.
-    await $.command.run({ ...TYPE_COMMAND, args: 'time 60' })
-    for (let index = 1; index < 10; index++) {
-      await typeNextWord(pane)
-    }
-    expect(await isFinished(pane)).toBe(true)
-    expect((await pane.find({ type: 'Button', key: 'pick-time' }))?.props['dimColor']).toBe(false)
-    expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { label: '◷ time (60)' } })
-
-    await pane.press({ key: 'again' })
-    await pane.press({ key: 'pick-time' })
-    expect(await pane.find({ type: 'Text', text: /^60$/ })).toMatchObject({ props: { color: 'warning' } })
-  })
-
   test('one group open at a time; a press on the open one closes it and changes nothing', async ($, on) => {
     const clock = mock.clock(on)
     const world = stubWorld(on)
@@ -980,7 +959,7 @@ describe('probe: toolbar and word list', () => {
     return found.slice(start + 1, end).filter(element => element.type === 'Text' || element.type === 'Button').map(element => element.text)
   }
 
-  test('the list opens on a press, showing every other list by its short name; a pick starts a test with it, saves it and closes', async ($, on) => {
+  test('the list opens on a press, showing every other list by its file name; a pick starts a test with it, saves it and closes', async ($, on) => {
     const clock = mock.clock(on)
     const world = stubWorld(on)
     world.wordListFiles = LISTS()
@@ -989,8 +968,8 @@ describe('probe: toolbar and word list', () => {
 
     expect(await listRow(pane)).toEqual(['english'])
     await pane.press({ key: 'pick-list' })
-    // english's family smallest first, then the others.
-    expect(await listRow(pane)).toEqual(['english', '1k', '10k', 'code'])
+    // The one in use, then the others in name order, numbers in natural order.
+    expect(await listRow(pane)).toEqual(['english', 'code', 'english_1k', 'english_10k'])
 
     await pane.press({ key: 'pick-list-code' })
     expect(await currentWord(pane)).toMatch(/^code\d+$/)
@@ -999,11 +978,10 @@ describe('probe: toolbar and word list', () => {
     expect(world.configWrites).toEqual([])
 
     await pane.press({ key: 'pick-list' })
-    expect(await listRow(pane)).toEqual(['code', 'english', '1k', '10k'])
+    expect(await listRow(pane)).toEqual(['code', 'english', 'english_1k', 'english_10k'])
     await pane.press({ key: 'pick-list-english_10k' })
     expect(await currentWord(pane)).toMatch(/^big\d+$/)
-    // Closed, a size reads with its family.
-    expect(await listRow(pane)).toEqual(['english 10k'])
+    expect(await listRow(pane)).toEqual(['english_10k'])
   })
 
   test('while a test runs the list cannot switch; on the result card it can', async ($, on) => {
@@ -1046,33 +1024,7 @@ describe('probe: toolbar and word list', () => {
     expect(await listRow(pane)).toEqual(['english'])
 
     await $.session.start(SESSION)
-    expect(await listRow(pane)).toEqual(['english', '1k', '10k', 'code'])
-  })
-
-  test('/type with settings opens the game with them and saves them', async ($, on) => {
-    const clock = mock.clock(on)
-    const world = stubWorld(on)
-    world.wordListFiles = LISTS()
-    await $.session.start(SESSION)
-
-    expect(await $.command.run({ ...TYPE_COMMAND, args: 'time 60 10k' })).toEqual({})
-    const pane = await $.ui.mount({ plugin: GAME, surface: 'terminal', component: 'Pane', requestId: GAME, props: PANE_PROPS })
-    expect(await currentWord(pane)).toMatch(/^big\d+$/)
-    expect(await listRow(pane)).toEqual(['english 10k'])
-    expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { label: '◷ time (60)' } })
-    expect((await pane.find({ type: 'Button', key: 'pick-time' }))?.props['dimColor']).toBe(false)
-    expect(world.saved.get('settings')).toEqual({ mode: 'time', counts: { time: 60, words: 25 }, wordList: 'english_10k' })
-    expect(world.configWrites).toEqual([])
-    void clock
-  })
-
-  test('/type with a word it does not know says so, and opens nothing', async ($, on) => {
-    const world = stubWorld(on)
-    world.wordListFiles = LISTS()
-    await $.session.start(SESSION)
-
-    expect(await $.command.run({ ...TYPE_COMMAND, args: 'code 45' })).toEqual({ text: 'unknown "45". Try /type code, /type time 30, /type words 50 10k' })
-    expect(world.configWrites).toEqual([])
+    expect(await listRow(pane)).toEqual(['english', 'code', 'english_1k', 'english_10k'])
   })
 
   test('the toolbar closed: the list, the modes with icons and counts, the mode in use bright, the rest dim', async ($, on) => {
@@ -1104,6 +1056,9 @@ describe('probe: band text', () => {
       ...(await band.findAll({ type: 'Button' })).map(found => `${String(found.props['hotkey'])}: ${String(found.props['label'])}`),
     ]
     expect(drawn).toEqual(['press', '1: type while you wait'])
+    // What to press bright, what it does dim.
+    expect((await band.find({ type: 'Text', text: 'press' }))?.props['dimColor']).toBeUndefined()
+    expect(await band.find({ type: 'Button', key: 'play' })).toMatchObject({ props: { dimColor: true } })
   })
 })
 

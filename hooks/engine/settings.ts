@@ -1,8 +1,8 @@
 import type { PluginOptions } from 'claude-code'
 
 import type { TypingCountedMode, TypingPicks, TypingSettings } from '../../types'
-import { COUNTED_MODES, DEFAULT_COUNTS, DEFAULT_MODE, DEFAULT_WORD_LIST, isCountedMode, isTypingMode, modeOfCount } from './modes'
-import { findWordListName, isWordListName } from './word-list'
+import { COUNTED_MODES, DEFAULT_COUNTS, DEFAULT_MODE, DEFAULT_WORD_LIST, isCountedMode, isTypingMode } from './modes'
+import { isWordListName } from './word-list'
 
 /** The settings before any pick: the defaults of `modes.ts`, adaptive words on. */
 export const DEFAULT_SETTINGS: TypingSettings = {
@@ -51,36 +51,6 @@ export const parseSavedPicks = (saved: unknown, defaults: TypingSettings): Typin
 
 /** The defaults before any pick, with adaptive words from /config: the one setting the game has no button for. */
 export const parseTypingSettings = (options: PluginOptions): TypingSettings => ({ ...DEFAULT_SETTINGS, isAdaptive: options['adaptive'] !== 'off' })
-
-export type TypeCommandResult =
-  | { readonly isValid: true; readonly settings: TypingSettings }
-  | { readonly isValid: false; readonly error: string }
-
-/**
- * The arguments of `/type`, in any order: a mode (`flow`, `time`, `words`), a count (a preset of
- * one mode: no two share a number, so a count alone names its mode), a word list by name or toolbar
- * label (`code`, `10k`). Each changes `settings`; anything else is an error naming it.
- */
-export const parseTypeArguments = (args: string, settings: TypingSettings, wordListNames: readonly string[]): TypeCommandResult => {
-  let chosen = settings
-
-  for (const token of args.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
-    const countMode = modeOfCount(Number(token))
-    const listName = findWordListName(token, wordListNames)
-
-    if (isTypingMode(token)) {
-      chosen = { ...chosen, mode: token }
-    } else if (countMode !== undefined) {
-      chosen = { ...chosen, mode: countMode, counts: { ...chosen.counts, [countMode]: Number(token) } }
-    } else if (listName !== undefined) {
-      chosen = { ...chosen, wordList: listName }
-    } else {
-      return { isValid: false, error: `unknown "${token}"` }
-    }
-  }
-
-  return { isValid: true, settings: chosen }
-}
 
 /** The count a settings' mode is played with: its count, or none for a mode without one (flow). */
 export const countOf = (settings: TypingSettings): number | undefined =>

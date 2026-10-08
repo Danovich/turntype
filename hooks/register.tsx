@@ -20,14 +20,13 @@ import { applyFieldInput, createRound, expireRound, finishByPlayer } from './eng
 import {
   DEFAULT_SETTINGS,
   parseSavedPicks,
-  parseTypeArguments,
   parseTypingSettings,
   PICKED_SETTINGS_KEY,
   picksOf,
   settingsInUse,
 } from './engine/settings'
 import { isIdle, isTimeUp } from './engine/timing'
-import { DEFAULT_WORD_LIST, TYPE_ARGUMENT_HINT } from './engine/modes'
+import { DEFAULT_WORD_LIST } from './engine/modes'
 import { FALLBACK_WORD_LIST, parseWordList } from './engine/word-list'
 import type { WordList } from './engine/word-list'
 import { backToTypingBand, invitationBand, resultBand } from './view/band'
@@ -484,7 +483,6 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'type',
       description: 'Type while Claude works: open the turntype game',
-      argumentHint: TYPE_ARGUMENT_HINT,
       immediate: true,
     })
 
@@ -507,16 +505,9 @@ export const register: Register = (on, options) => {
     return result
   }).catch(($, e, next) => next(e))
 
-  // Where nothing draws, say so: an empty answer would look like a command that did nothing.
-  // `/type`, or with settings: `/type code`, `/type time 30`, `/type words 50 10k`. The game opens
-  // with them, then they are saved as a pick in the toolbar is.
-  on('command.run', { command: 'type' }, async ($, e) => {
-    const parsed = parseTypeArguments(e.args, await readSettings($), [...wordLists.keys()])
-
-    if (!parsed.isValid) {
-      return { text: `${parsed.error}. Try /type code, /type time 30, /type words 50 10k` }
-    }
-    await applySettings($, parsed.settings)
+  // `/type` opens the game; its toolbar changes the settings. Where nothing draws, say so: an empty
+  // answer would look like a command that did nothing.
+  on('command.run', { command: 'type' }, async $ => {
     const opened = await openGame($)
 
     return opened.isPlaced ? {} : { text: `the game needs the terminal or the Desktop app (${opened.reason})` }
