@@ -24,11 +24,7 @@ const letterTextProps = (palette: Palette): Record<LetterStyle, TextProps> => ({
   [LETTER_STYLE.incorrect]: { color: palette.error },
   [LETTER_STYLE.missed]: { dimColor: true },
   [LETTER_STYLE.untyped]: { dimColor: true },
-  [LETTER_STYLE.currentCorrect]: {},
-  [LETTER_STYLE.currentIncorrect]: { color: palette.error },
-  [LETTER_STYLE.currentUntyped]: { dimColor: true },
   [LETTER_STYLE.caret]: { color: palette.warning, inverse: true },
-  [LETTER_STYLE.caretSpace]: { color: palette.warning, inverse: true },
   [LETTER_STYLE.space]: {},
 })
 

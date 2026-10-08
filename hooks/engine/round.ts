@@ -16,12 +16,6 @@ import { EMPTY_FOLD, foldOf, foldWindow } from './window'
 import { FALLBACK_WORD_LIST, pickWords } from './word-list'
 import type { WordList } from './word-list'
 
-/**
- * True: the field is emptied after each word (a new key for each word).
- * False: one field holds the whole test. The fallback if a key change loses the focus.
- */
-export const RESET_FIELD_PER_WORD = true
-
 export const ROUND_ENDING = {
   complete: 'complete',
   timeUp: 'timeUp',
@@ -185,9 +179,6 @@ const nextField = (
   typed: string,
   didCommit: boolean,
 ): Pick<TypingRoundBase, 'fieldIndex' | 'fieldBaseLength' | 'fieldValue'> => {
-  if (!RESET_FIELD_PER_WORD) {
-    return { fieldIndex: 0, fieldBaseLength: 0, fieldValue: '' }
-  }
   // A late change from a field that was already replaced: the new field is still empty,
   // so the text it held after its word (keys typed before the redraw) joins the base.
   if (fieldIndex < round.fieldIndex) {
@@ -200,18 +191,19 @@ const nextField = (
 }
 
 /**
- * The typed text with its current word cut to the target word's length, or the text as it is: a
- * word takes no letters past its end, so the next key after a typed-out word is the space. Only the
- * current word: a word already committed (a paste) stays as typed.
+ * The text as typed, with what is not typing left out: spaces before a word (only one space ends a
+ * word) and letters past the current word's end (the next key after a typed-out word is the space).
+ * A word already committed stays as typed: only a paste can make one too long.
  */
-const clampCurrentWord = (typed: string, targetWords: readonly string[]): string => {
-  const { committedWords, currentWord } = parseTyped(typed)
+const typedText = (fieldTyped: string, targetWords: readonly string[]): string => {
+  const spaced = fieldTyped.replace(/^ +/, '').replace(/ {2,}/g, ' ')
+  const { committedWords, currentWord } = parseTyped(spaced)
   const overflow = currentWord.length - (targetWords[committedWords.length] ?? '').length
 
-  return overflow > 0 ? typed.slice(0, typed.length - overflow) : typed
+  return overflow > 0 ? spaced.slice(0, spaced.length - overflow) : spaced
 }
 
-/** A fresh field (a new key) holding the current word as cut: the field drawn before shows the keys cut away. */
+/** A fresh field (a new key) holding the current word as typed: the field drawn before shows keys left out. */
 const withFreshField = <R extends TypingRoundReady | TypingRoundRunning>(round: R, typed: string): R => ({
   ...round,
   fieldIndex: round.fieldIndex + 1,
@@ -260,30 +252,21 @@ export const applyFieldInput = (
   if (round.phase === 'running' && isTimeUp(round, now)) {
     return finishRound(round, ROUND_ENDING.timeUp)
   }
-  // Spaces before a word are skipped, but the field would keep them and its cursor would drift
-  // right: a fresh, empty field (a new key) takes its place. The typed text does not change.
-  if (fieldText !== '' && fieldText.trim() === '') {
-    return { ...round, fieldIndex: round.fieldIndex + 1, fieldValue: '' }
-  }
-
-  // Keys past a word's end are discarded: left out of the text and the scores, and the field is
-  // drawn again holding the word without them.
+  // One rule for keys that are not typing (a space before a word, a letter past a word's end):
+  // they are left out of the text and the scores. Where that leaves the text as it was, the round
+  // stays; where the field shows them, a fresh field (a new key) holds the text without them.
   const fieldTyped = fieldBase + fieldText
-  const typed = clampCurrentWord(fieldTyped, round.targetWords)
-  const isClamped = typed !== fieldTyped
+  const typed = typedText(fieldTyped, round.targetWords)
+  const fieldShowsTyped = typed === fieldTyped
 
-  if (isClamped && typed === previousTyped) {
-    return withFreshField(round, typed)
+  if (typed === previousTyped) {
+    return fieldShowsTyped ? round : withFreshField(round, typed)
   }
 
   const isAppend = typed.startsWith(previousTyped)
   const appended = isAppend ? typed.slice(previousTyped.length) : ''
   const tally = tallyAppended(previousTyped, appended, round.targetWords)
   const keystrokes = tally.correct + tally.incorrect
-
-  if (round.phase === 'ready' && keystrokes === 0) {
-    return round
-  }
 
   const started = round.phase === 'running' ? round : undefined
   const startedAt = started?.startedAt ?? now
@@ -332,7 +315,7 @@ export const applyFieldInput = (
     return finishRound(sampled, ROUND_ENDING.complete)
   }
 
-  if (isClamped) {
+  if (!fieldShowsTyped) {
     return withFreshField(sampled, typed)
   }
 

@@ -503,16 +503,16 @@ describe('layout', () => {
   const caretRuns = (typed: string) =>
     buildVisibleLines(WORDS, typed, 8, 3)
       .flat()
-      .filter(run => run.style === LETTER_STYLE.caret || run.style === LETTER_STYLE.caretSpace)
+      .filter(run => run.style === LETTER_STYLE.caret)
       .map(run => ({ text: run.text, style: run.style }))
 
   test('the caret: on the next letter, then on the space once the word is typed out', async () => {
     expect(caretRuns('')).toEqual([{ text: 'a', style: LETTER_STYLE.caret }])
     expect(caretRuns('aaa bb')).toEqual([{ text: 'b', style: LETTER_STYLE.caret }])
-    expect(caretRuns('aaa bbb')).toEqual([{ text: ' ', style: LETTER_STYLE.caretSpace }])
+    expect(caretRuns('aaa bbb')).toEqual([{ text: ' ', style: LETTER_STYLE.caret }])
     // A wrong letter or a word typed too long moves the caret on all the same.
     expect(caretRuns('aaa x')).toEqual([{ text: 'b', style: LETTER_STYLE.caret }])
-    expect(caretRuns('aaa bbbb')).toEqual([{ text: ' ', style: LETTER_STYLE.caretSpace }])
+    expect(caretRuns('aaa bbbb')).toEqual([{ text: ' ', style: LETTER_STYLE.caret }])
   })
 
   // The styles of one word's letters on show, by the word's position in WORDS.
@@ -524,7 +524,7 @@ describe('layout', () => {
 
   test('a word typed too long stays red once committed, as it was while typed', async () => {
     // "aaa" right, then "bbb" with extra letters: every letter of "bbb" red, before and after the space.
-    expect(wordStyles('aaa bbbxx', 1)).toEqual([LETTER_STYLE.currentIncorrect, LETTER_STYLE.currentIncorrect, LETTER_STYLE.currentIncorrect])
+    expect(wordStyles('aaa bbbxx', 1)).toEqual([LETTER_STYLE.incorrect, LETTER_STYLE.incorrect, LETTER_STYLE.incorrect])
     expect(wordStyles('aaa bbbxx ', 1)).toEqual([LETTER_STYLE.incorrect, LETTER_STYLE.incorrect, LETTER_STYLE.incorrect])
     expect(wordStyles('aaa bbbxx ', 0)).toEqual([LETTER_STYLE.correct, LETTER_STYLE.correct, LETTER_STYLE.correct])
   })

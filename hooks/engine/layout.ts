@@ -7,15 +7,11 @@ import { parseTyped } from './typed-text'
 export const LETTER_STYLE = {
   correct: 'correct',
   incorrect: 'incorrect',
+  /** A letter a finished word went without (typed too short). */
   missed: 'missed',
   untyped: 'untyped',
-  currentCorrect: 'currentCorrect',
-  currentIncorrect: 'currentIncorrect',
-  currentUntyped: 'currentUntyped',
-  /** The next letter to type, in the current word. */
+  /** The next character to type: a letter of the current word, or the space after it once typed out. */
   caret: 'caret',
-  /** The space after a current word typed out: the next key is the space. */
-  caretSpace: 'caretSpace',
   space: 'space',
 } as const
 
@@ -27,50 +23,41 @@ export type LetterStyle = (typeof LETTER_STYLE)[keyof typeof LETTER_STYLE]
  */
 export type LetterRun = { readonly text: string; readonly style: LetterStyle; readonly isInErrorWord: boolean }
 
-/** A word as typed has a mistake: committed, unless it is the target exactly; current, once it leaves the target's start. */
-const hasError = (typedWord: string | undefined, targetWord: string, isCommitted: boolean): boolean =>
-  typedWord !== undefined && (isCommitted ? typedWord !== targetWord : !targetWord.startsWith(typedWord))
-
 export type VisibleLine = readonly LetterRun[]
 
-/** As the word was typed; a word typed too long stays all wrong, as it was while it was current. */
-const committedLetterStyle = (typedWord: string, index: number, targetWord: string): LetterStyle => {
-  const typedCharacter = typedWord[index]
+/** Where a word stands: typed and committed, being typed, or still to come. */
+type WordPlace = 'committed' | 'current' | 'ahead'
 
+/** A word as typed has a mistake: committed, unless it is the target exactly; current, once it leaves the target's start. */
+const hasError = (typedWord: string, targetWord: string, place: WordPlace): boolean =>
+  place === 'committed' ? typedWord !== targetWord : place === 'current' && !targetWord.startsWith(typedWord)
+
+/**
+ * One letter as typed. A word typed too long is all wrong. A letter not reached is missed in a
+ * committed word; in the current word it is the caret (the next one) or still to type.
+ */
+const letterStyle = (typedWord: string, index: number, targetWord: string, place: WordPlace): LetterStyle => {
+  if (place === 'ahead') {
+    return LETTER_STYLE.untyped
+  }
   if (typedWord.length > targetWord.length) {
     return LETTER_STYLE.incorrect
   }
+  const typedCharacter = typedWord[index]
+
   if (typedCharacter === undefined) {
-    return LETTER_STYLE.missed
+    return place === 'committed' ? LETTER_STYLE.missed : index === typedWord.length ? LETTER_STYLE.caret : LETTER_STYLE.untyped
   }
 
   return typedCharacter === targetWord[index] ? LETTER_STYLE.correct : LETTER_STYLE.incorrect
 }
 
-/** Letters past the typed text stay highlighted; a word typed too long marks every letter wrong. */
-const currentLetterStyle = (typedWord: string, index: number, targetWord: string): LetterStyle => {
-  const typedCharacter = typedWord[index]
-
-  if (typedWord.length > targetWord.length) {
-    return LETTER_STYLE.currentIncorrect
-  }
-  if (typedCharacter === undefined) {
-    return index === typedWord.length ? LETTER_STYLE.caret : LETTER_STYLE.currentUntyped
-  }
-
-  return typedCharacter === targetWord[index] ? LETTER_STYLE.currentCorrect : LETTER_STYLE.currentIncorrect
-}
-
-const wordLetters = (targetWord: string, typedWord: string | undefined, isCommitted: boolean, isCurrent: boolean): LetterRun[] => {
-  const isInErrorWord = (isCommitted || isCurrent) && hasError(typedWord, targetWord, isCommitted)
+const wordLetters = (targetWord: string, typedWord: string, place: WordPlace): LetterRun[] => {
+  const isInErrorWord = hasError(typedWord, targetWord, place)
 
   return [...targetWord].map((targetCharacter, index) => ({
     text: targetCharacter,
-    style: isCurrent
-      ? currentLetterStyle(typedWord ?? '', index, targetWord)
-      : isCommitted
-        ? committedLetterStyle(typedWord ?? '', index, targetWord)
-        : LETTER_STYLE.untyped,
+    style: letterStyle(typedWord, index, targetWord, place),
     isInErrorWord,
   }))
 }
@@ -105,8 +92,7 @@ export const buildVisibleLines = (
 ): readonly VisibleLine[] => {
   const { committedWords, currentWord } = parseTyped(typed)
   const currentIndex = committedWords.length
-  const typedWordAt = (index: number): string | undefined =>
-    index < currentIndex ? committedWords[index] : index === currentIndex ? currentWord : undefined
+  const placeOf = (index: number): WordPlace => (index < currentIndex ? 'committed' : index === currentIndex ? 'current' : 'ahead')
 
   const lineStarts: number[] = [0]
   let lineWidth = 0
@@ -130,13 +116,14 @@ export const buildVisibleLines = (
     const endIndex = lineStarts[firstLine + offset + 1] ?? targetWords.length
     const letters = targetWords.slice(startIndex, endIndex).flatMap((targetWord, position) => {
       const index = startIndex + position
-      const isCurrent = index === currentIndex
+      const place = placeOf(index)
+      const typedWord = place === 'committed' ? (committedWords[index] ?? '') : place === 'current' ? currentWord : ''
       // A typed-out (or too long) current word: the next key is the space, so the caret sits on it.
-      const isCaretOnSpace = isCurrent && currentWord.length >= targetWord.length
+      const isCaretOnSpace = place === 'current' && currentWord.length >= targetWord.length
 
       return [
-        ...wordLetters(targetWord, typedWordAt(index), index < currentIndex, isCurrent),
-        { text: ' ', style: isCaretOnSpace ? LETTER_STYLE.caretSpace : LETTER_STYLE.space, isInErrorWord: false },
+        ...wordLetters(targetWord, typedWord, place),
+        { text: ' ', style: isCaretOnSpace ? LETTER_STYLE.caret : LETTER_STYLE.space, isInErrorWord: false },
       ]
     })
 
