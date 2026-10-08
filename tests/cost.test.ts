@@ -57,7 +57,10 @@ test('cost: typing 20 words with the pane focused', async ($, on) => {
 
   for (let index = 0; index < 20; index++) {
     const key = (await pane.find({ type: 'Input' }))?.key ?? ''
-    const word = (await pane.findAll({ type: 'Text' })).filter(found => found.props['underline'] === true).map(found => found.text).join('')
+    // The word at the caret: the yellow block on its first letter, up to the next space.
+    const texts = await pane.findAll({ type: 'Text' })
+    const caret = texts.findIndex(found => found.props['inverse'] === true)
+    const word = texts.slice(caret).map(found => found.text).join('').split(' ')[0] ?? ''
     for (const [position] of [...word, ' '].entries()) {
       await pane.input({ key, text: `${word} `.slice(0, position + 1), kind: 'change' })
     }

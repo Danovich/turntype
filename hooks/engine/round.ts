@@ -60,6 +60,7 @@ export const createRound = (
     isClaudeDone: false,
     fieldIndex: 0,
     fieldBaseLength: 0,
+    fieldValue: '',
     focusBigrams,
     pbWpm: undefined,
     wordList: wordList.name,
@@ -150,6 +151,7 @@ export const finishRound = (round: TypingRoundRunning, ending: TypingRoundEnding
   isClaudeDone: round.isClaudeDone,
   fieldIndex: round.fieldIndex,
   fieldBaseLength: round.fieldBaseLength,
+  fieldValue: round.fieldValue,
   focusBigrams: round.focusBigrams,
   pbWpm: round.pbWpm,
   wordList: round.wordList,
@@ -182,20 +184,39 @@ const nextField = (
   fieldIndex: number,
   typed: string,
   didCommit: boolean,
-): Pick<TypingRoundBase, 'fieldIndex' | 'fieldBaseLength'> => {
+): Pick<TypingRoundBase, 'fieldIndex' | 'fieldBaseLength' | 'fieldValue'> => {
   if (!RESET_FIELD_PER_WORD) {
-    return { fieldIndex: 0, fieldBaseLength: 0 }
+    return { fieldIndex: 0, fieldBaseLength: 0, fieldValue: '' }
   }
   // A late change from a field that was already replaced: the new field is still empty,
   // so the text it held after its word (keys typed before the redraw) joins the base.
   if (fieldIndex < round.fieldIndex) {
-    return { fieldIndex: round.fieldIndex, fieldBaseLength: typed.length }
+    return { fieldIndex: round.fieldIndex, fieldBaseLength: typed.length, fieldValue: '' }
   }
 
   return didCommit
-    ? { fieldIndex: round.fieldIndex + 1, fieldBaseLength: typed.length }
-    : { fieldIndex: round.fieldIndex, fieldBaseLength: round.fieldBaseLength }
+    ? { fieldIndex: round.fieldIndex + 1, fieldBaseLength: typed.length, fieldValue: '' }
+    : { fieldIndex: round.fieldIndex, fieldBaseLength: round.fieldBaseLength, fieldValue: round.fieldValue }
 }
+
+/**
+ * The typed text with its current word cut to the target word's length, or the text as it is: a
+ * word takes no letters past its end, so the next key after a typed-out word is the space. Only the
+ * current word: a word already committed (a paste) stays as typed.
+ */
+const clampCurrentWord = (typed: string, targetWords: readonly string[]): string => {
+  const { committedWords, currentWord } = parseTyped(typed)
+  const overflow = currentWord.length - (targetWords[committedWords.length] ?? '').length
+
+  return overflow > 0 ? typed.slice(0, typed.length - overflow) : typed
+}
+
+/** A fresh field (a new key) holding the current word as cut: the field drawn before shows the keys cut away. */
+const withFreshField = <R extends TypingRoundReady | TypingRoundRunning>(round: R, typed: string): R => ({
+  ...round,
+  fieldIndex: round.fieldIndex + 1,
+  fieldValue: typed.slice(round.fieldBaseLength),
+})
 
 /** Ends a time test whose active time has run out; any other round is returned as it is. */
 export const expireRound = (round: TypingRound, now: number): TypingRound =>
@@ -242,10 +263,19 @@ export const applyFieldInput = (
   // Spaces before a word are skipped, but the field would keep them and its cursor would drift
   // right: a fresh, empty field (a new key) takes its place. The typed text does not change.
   if (fieldText !== '' && fieldText.trim() === '') {
-    return { ...round, fieldIndex: round.fieldIndex + 1 }
+    return { ...round, fieldIndex: round.fieldIndex + 1, fieldValue: '' }
   }
 
-  const typed = fieldBase + fieldText
+  // Keys past a word's end are discarded: left out of the text and the scores, and the field is
+  // drawn again holding the word without them.
+  const fieldTyped = fieldBase + fieldText
+  const typed = clampCurrentWord(fieldTyped, round.targetWords)
+  const isClamped = typed !== fieldTyped
+
+  if (isClamped && typed === previousTyped) {
+    return withFreshField(round, typed)
+  }
+
   const isAppend = typed.startsWith(previousTyped)
   const appended = isAppend ? typed.slice(previousTyped.length) : ''
   const tally = tallyAppended(previousTyped, appended, round.targetWords)
@@ -300,6 +330,10 @@ export const applyFieldInput = (
   }
   if (sampled.mode === TYPING_MODE.flow && sampled.isClaudeDone && tally.didCommit) {
     return finishRound(sampled, ROUND_ENDING.complete)
+  }
+
+  if (isClamped) {
+    return withFreshField(sampled, typed)
   }
 
   // A committed word is final: the time to fold the oldest words once there are enough.

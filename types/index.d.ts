@@ -67,6 +67,11 @@ export type TypingRoundBase = {
    * always the start of `typed`, so a length, not a second copy of that text.
    */
   readonly fieldBaseLength: number
+  /**
+   * The text the current field is drawn holding: empty, or the current word without the keys
+   * typed past its end. Fixed for the field's life, so a redraw never resets it.
+   */
+  readonly fieldValue: string
   /** The weak letter pairs this round practices; empty when adaptive words are off. */
   readonly focusBigrams: readonly string[]
   /** The personal best of this test when the round was made: fixed for the round, so a key reads no other value. */
@@ -151,6 +156,8 @@ declare module 'claude-code' {
       isPaneFocused: boolean
       /** The result card shows its second line of stats (raw, consistency, characters). */
       isDetailsShown: boolean
+      /** The toolbar group showing its options (the word lists, or a mode's counts); null: all closed. */
+      openOptions: 'list' | 'time' | 'words' | null
       /** Personal best wpm per configuration key, loaded from the store: the live vs-PB mark reads it. */
       personalBests: Readonly<Record<string, number>>
       /** The player's weakest letter pairs from the store: new rounds practice them. */

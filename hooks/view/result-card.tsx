@@ -3,6 +3,7 @@ import { bigNumberRows } from '../engine/big-digits'
 import { sparkline } from '../engine/progress'
 import type { Palette } from './palette'
 import { settingsPicker } from './picker'
+import type { OpenOptions, PickerActions } from './picker'
 import { formatClock, ONE_ROW, ROW_GAP } from './shared'
 import type { GameElements } from './shared'
 
@@ -12,10 +13,12 @@ export type ResultCardProps = {
   readonly isDetailsShown: boolean
   /** The settings a pick in the picker starts from. */
   readonly settings: TypingSettings
-  /** Every word list read from `word-lists/`, in order: the label moves to the next. */
+  /** Every word list read from `word-lists/`. */
   readonly wordListNames: readonly string[]
   /** The colors for the person's Claude Code theme. */
   readonly palette: Palette
+  /** The toolbar group showing its options, if any. */
+  readonly openOptions: OpenOptions
 }
 
 export type ResultCardActions = {
@@ -23,6 +26,7 @@ export type ResultCardActions = {
   readonly onClose: () => void
   readonly onToggleDetails: () => void
   readonly onChoose: (chosen: TypingSettings) => void
+  readonly onToggle: PickerActions['onToggle']
 }
 
 const pbText = (Text: GameElements['Text'], wpm: number, progress: TypingProgressSummary | undefined, palette: Palette) => {
@@ -97,7 +101,12 @@ export const resultCard = (elements: GameElements, round: TypingRoundFinished, p
         <Button key="close" label="close" hotkey="x" plain onPress={actions.onClose} />
         <Button key="details" label={props.isDetailsShown ? 'hide details' : 'details'} hotkey="d" plain onPress={actions.onToggleDetails} />
       </Box>
-      {settingsPicker({ Box, Button, Text }, round, props.settings, props.wordListNames, props.palette, actions.onChoose)}
+      {settingsPicker(
+        { Box, Button, Text },
+        round,
+        { settings: props.settings, wordListNames: props.wordListNames, palette: props.palette, openOptions: props.openOptions },
+        { onChoose: actions.onChoose, onToggle: actions.onToggle },
+      )}
     </Box>
   )
 }

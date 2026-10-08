@@ -2,7 +2,7 @@
 
 A typing test for the time while Claude works. A Claude Code mod.
 
-When a turn takes more than 1.5 seconds, a line shows above the prompt: `press 1: type while you wait (flow)`. Press `1` in an empty prompt (or run `/type`) to open the game. Type the words. Your result, personal best and daily total show when the test ends.
+When a turn takes more than 1.5 seconds, a line shows above the prompt: `press 1: type while you wait`. Press `1` in an empty prompt (or run `/type`) to open the game. Type the words. Your result, personal best and daily total show when the test ends.
 
 Tested with **Claude Code 2.1.292**. The mods API can change between releases.
 
@@ -14,11 +14,11 @@ Tested with **Claude Code 2.1.292**. The mods API can change between releases.
 | `words` 10 / 25 / 50 / 100 | You type the last word |
 | `time` 15 / 30 / 60 / 120 | The active time runs out (a pause of more than 3 s does not count) |
 
-Pick a mode in the toolbar under the field before the first key (`◍ english ❘ ∿ flow  ◷ time  ☰ words`, the selected one in yellow), or in `/config`. With **adaptive words** on (the default), about a third of the words practice the letter pairs you miss most.
+Pick a mode in the toolbar under the field before the first key (`◍ english ❘ ∿ flow  ◷ time (30)  ☰ words (25)`, the ones in use bright): press **Tab** to reach it, then Enter, or click. A press on the list, time or words shows its options (`◷ time  15  30  60  120`); a pick closes them and the field takes the keys again. Or name the settings when you open the game: `/type code`, `/type time 30`, `/type words 50 10k` (any order; they are saved). `/config` has them too. With **adaptive words** on (the default), about a third of the words practice the letter pairs you miss most.
 
 ## Word lists
 
-The words come from JSON files in `word-lists/`: `english` (200 common words), `english_1k`, `english_5k` and `english_10k` (the 1,000, 5,000 and about 10,000 most common words, from [Monkeytype](https://github.com/monkeytypegame/monkeytype)), and `code` (keywords, identifiers and symbols such as `=>` and `?.`). To change the list, press its name at the start of the toolbar (`◍ english`) before you start typing, or set **Word list** in `/config`.
+The words come from JSON files in `word-lists/`: `english` (200 common words), `english_1k`, `english_5k` and `english_10k` (the 1,000, 5,000 and about 10,000 most common words, from [Monkeytype](https://github.com/monkeytypegame/monkeytype)), and `code` (keywords, identifiers and symbols such as `=>` and `?.`). To change the list, open it in the toolbar before you start typing (`◍ english`; open, a size shows as its suffix: `1k`, `5k`, `10k`), run `/type <list>` (`/type code`, `/type 10k`), or set **Word list** in `/config`.
 
 To add a list, add a file such as `word-lists/german.json`:
 
@@ -40,6 +40,7 @@ The lists are read when the session starts and when the mod reloads.
 | `1` | Empty prompt | Opens the game, continues a test, or goes back to the game after a dialog took the keys |
 | `ctrl+x tab` | Anywhere | Gives the keys back to the game pane |
 | Enter | Game field | Ends the test |
+| Tab | Game field, before the first key | Moves to the toolbar: word lists, modes and counts |
 | Esc | Game pane | Hides the pane. A test in progress waits in the band. |
 | `a` / `x` / `d` | Result card | Again / close / show or hide details |
 

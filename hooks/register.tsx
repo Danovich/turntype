@@ -15,7 +15,7 @@ import {
 } from './engine/progress'
 import type { ProgressPart, StoredProgress } from './engine/progress'
 import { applyFieldInput, createRound, expireRound, finishByPlayer } from './engine/round'
-import { DEFAULT_SETTINGS, parseTypingSettings } from './engine/settings'
+import { DEFAULT_SETTINGS, parseTypeArguments, parseTypingSettings } from './engine/settings'
 import { isIdle, isTimeUp } from './engine/timing'
 import { DEFAULT_WORD_LIST_NAME, FALLBACK_WORD_LIST, parseWordList } from './engine/word-list'
 import type { WordList } from './engine/word-list'
@@ -24,6 +24,7 @@ import { gameView } from './view/game'
 import { resultCard } from './view/result-card'
 import { paletteFor, THEME_PALETTE } from './view/palette'
 import type { Palette } from './view/palette'
+import type { OpenOptions } from './view/picker'
 import { modeLabel } from './view/shared'
 import type { ActiveRound } from './view/shared'
 
@@ -32,6 +33,8 @@ const clockTickAtom = atom({ plugin: 'turntype', key: 'clockTick' } as const, 0)
 const isGameOpenAtom = atom({ plugin: 'turntype', key: 'isGameOpen' } as const, false)
 const isPaneFocusedAtom = atom({ plugin: 'turntype', key: 'isPaneFocused' } as const, true)
 const isDetailsShownAtom = atom({ plugin: 'turntype', key: 'isDetailsShown' } as const, false)
+const NO_OPEN_OPTIONS: OpenOptions = null
+const openOptionsAtom = atom({ plugin: 'turntype', key: 'openOptions' } as const, NO_OPEN_OPTIONS)
 const NO_PERSONAL_BESTS: Readonly<Record<string, number>> = {}
 const personalBestsAtom = atom({ plugin: 'turntype', key: 'personalBests' } as const, NO_PERSONAL_BESTS)
 const NO_BIGRAMS: readonly string[] = []
@@ -309,16 +312,18 @@ const showInvitation = async (dollar: Dollar): Promise<void> => {
 
 const USER_CONFIG_FIELDS = ['mode', 'wordCount', 'timeSeconds', 'wordList'] as const
 
-/**
- * A pick in the pane: the round changes at once, then the choice is saved as userConfig, so
- * /config and the next session agree. Saved last: each change reloads the module, which reads it.
- */
-const chooseSettings = async (dollar: Dollar, chosen: TypingSettings): Promise<void> => {
-  const previous = settings
+/** New settings for this session: a round not yet started is made again with them; a running test keeps its own. */
+const applySettings = async (dollar: Dollar, chosen: TypingSettings): Promise<void> => {
   settings = chosen
   const makeRound = await roundMaker(dollar, chosen)
   await replaceRound(dollar, round => (round?.phase === 'running' ? round : makeRound(round)))
+}
 
+/**
+ * Saves the fields that changed as userConfig, so /config and the next session agree. Called last:
+ * each change reloads the module, which reads it again.
+ */
+const saveSettings = async (dollar: Dollar, previous: TypingSettings, chosen: TypingSettings): Promise<void> => {
   try {
     for (const field of USER_CONFIG_FIELDS.filter(name => chosen[name] !== previous[name])) {
       await dollar.config.set({ key: `turntype.${field}`, value: String(chosen[field]) })
@@ -326,6 +331,31 @@ const chooseSettings = async (dollar: Dollar, chosen: TypingSettings): Promise<v
   } catch {
     // Not saved (no such row, a policy lock): the pick still holds for this session.
   }
+}
+
+/**
+ * The new round's field takes the keys: the button just pressed is gone from the toolbar, and the
+ * next thing to do is type. Refused (the pane does not hold the keys), the focus stays as it is.
+ */
+const focusField = async (dollar: Dollar): Promise<void> => {
+  const round = await read(dollar, roundAtom)
+
+  if (isActive(round)) {
+    try {
+      await dollar.ui.focus({ requestId: GAME_PANE_ID, key: `r${round.roundId}-f${round.fieldIndex}` })
+    } catch {
+      // No focus call (an old host): the pick still holds; Tab or a click reaches the field.
+    }
+  }
+}
+
+/** A pick in the pane: the round changes at once, the lists close, the field takes the keys, then the choice is saved. */
+const chooseSettings = async (dollar: Dollar, chosen: TypingSettings): Promise<void> => {
+  const previous = settings
+  await applySettings(dollar, chosen)
+  await update(dollar, openOptionsAtom, () => null)
+  await focusField(dollar)
+  await saveSettings(dollar, previous, chosen)
 }
 
 const findGamePane = async (dollar: Dollar) => (await dollar.ui.panes()).find(pane => pane.id === GAME_PANE_ID)
@@ -423,11 +453,15 @@ export const register: Register = (on, options) => {
     // Lists and colors first: syncSession may draw, and a new round names its list.
     await loadWordLists($)
     await loadPalette($)
+    // Lists and colors are module variables, not state: a pane drawn before they were read (a
+    // reload after a pick saved to /config draws the open pane at once) is drawn again with them.
+    $.ui.invalidate('ui.render')
     await syncSession($)
     // Last: a refused name throws, and nothing after it would run.
     await $.command.register({
       name: 'type',
       description: 'Type while Claude works: open the turntype game',
+      argumentHint: '[list] [flow | time 15–120 | words 10–100]',
       immediate: true,
     })
 
@@ -451,8 +485,18 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   // Where nothing draws, say so: an empty answer would look like a command that did nothing.
-  on('command.run', { command: 'type' }, async $ => {
+  // `/type`, or with settings: `/type code`, `/type time 30`, `/type words 50 10k`. The game opens
+  // with them, then they are saved as a pick in the toolbar is.
+  on('command.run', { command: 'type' }, async ($, e) => {
+    const previous = settings
+    const parsed = parseTypeArguments(e.args, settings, [...wordLists.keys()])
+
+    if (!parsed.isValid) {
+      return { text: `${parsed.error}. Try /type code, /type time 30, /type words 50 10k` }
+    }
+    await applySettings($, parsed.settings)
     const opened = await openGame($)
+    await saveSettings($, previous, parsed.settings)
 
     return opened.isPlaced ? {} : { text: `the game needs the terminal or the Desktop app (${opened.reason})` }
   })
@@ -577,12 +621,20 @@ export const register: Register = (on, options) => {
       return resultCard(
         elements,
         round,
-        { isTerminal: e.surface === 'terminal', isDetailsShown: await read($, isDetailsShownAtom), settings, wordListNames: [...wordLists.keys()], palette },
+        {
+          isTerminal: e.surface === 'terminal',
+          isDetailsShown: await read($, isDetailsShownAtom),
+          settings,
+          wordListNames: [...wordLists.keys()],
+          palette,
+          openOptions: await read($, openOptionsAtom),
+        },
         {
           onAgain: () => void startNewRound($),
           onClose: () => void closeGame($),
           onToggleDetails: () => void update($, isDetailsShownAtom, isShown => !isShown),
           onChoose: chosen => void chooseSettings($, chosen),
+          onToggle: group => void update($, openOptionsAtom, open => (open === group ? null : group)),
         },
       )
     }
@@ -595,11 +647,21 @@ export const register: Register = (on, options) => {
     return gameView(
       elements,
       round,
-      { bodyColumns: e.props.bodyColumns, isFocused: e.props.isFocused, now: Date.now(), settings, wordListNames: [...wordLists.keys()], palette },
+      {
+        bodyColumns: e.props.bodyColumns,
+        isFocused: e.props.isFocused,
+        now: Date.now(),
+        settings,
+        wordListNames: [...wordLists.keys()],
+        palette,
+        // Only before the first key, where the toolbar is drawn: a key never reads it.
+        openOptions: round.phase === 'ready' ? await read($, openOptionsAtom) : null,
+      },
       {
         onInput: (roundId, fieldIndex, fieldBaseLength, fieldBaseDropped, text) => handleInput($, roundId, fieldIndex, fieldBaseLength, fieldBaseDropped, text),
         onFinish: roundId => handleFinish($, roundId),
         onChoose: chosen => void chooseSettings($, chosen),
+        onToggle: group => void update($, openOptionsAtom, open => (open === group ? null : group)),
       },
     )
   })

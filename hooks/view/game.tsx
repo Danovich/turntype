@@ -9,23 +9,39 @@ import { activeElapsedMs, isIdle } from '../engine/timing'
 import { foldOf } from '../engine/window'
 import type { Palette } from './palette'
 import { settingsPicker } from './picker'
+import type { OpenOptions, PickerActions } from './picker'
 import { formatClock, ONE_ROW, progressLabel, ROW_GAP } from './shared'
 import type { ActiveRound, GameElements } from './shared'
 
-/** How each letter of the words rows is drawn: the target letter, styled by how it was typed. */
+/**
+ * How each letter of the words rows is drawn: the target letter, styled by how it was typed. Text
+ * still to type is dim; letters typed right white, wrong ones red; letters skipped in a finished word
+ * dim. A yellow block on the next character is where the next key lands. A word with a mistake is
+ * underlined (`isInErrorWord`, added per run): in its letters' colors, as a terminal draws it.
+ */
 const letterTextProps = (palette: Palette): Record<LetterStyle, TextProps> => ({
   [LETTER_STYLE.correct]: {},
   [LETTER_STYLE.incorrect]: { color: palette.error },
-  [LETTER_STYLE.missed]: { color: palette.error, dimColor: true },
+  [LETTER_STYLE.missed]: { dimColor: true },
   [LETTER_STYLE.untyped]: { dimColor: true },
-  [LETTER_STYLE.currentCorrect]: { bold: true, underline: true },
-  [LETTER_STYLE.currentIncorrect]: { color: palette.error, bold: true, underline: true },
-  [LETTER_STYLE.currentUntyped]: { color: palette.warning, underline: true },
+  [LETTER_STYLE.currentCorrect]: {},
+  [LETTER_STYLE.currentIncorrect]: { color: palette.error },
+  [LETTER_STYLE.currentUntyped]: { dimColor: true },
+  [LETTER_STYLE.caret]: { color: palette.warning, inverse: true },
+  [LETTER_STYLE.caretSpace]: { color: palette.warning, inverse: true },
   [LETTER_STYLE.space]: {},
 })
 
 /** Three lines of words in every phase: the first key changes nothing above the field. */
 const WORD_LINE_COUNT = 3
+/** What Enter does, drawn by the field after its text: `⏎ finish`. */
+const SUBMIT_LABEL = 'finish'
+/**
+ * In the field before the first key, so the row reads `start typing ⏎ finish`, in that order. The
+ * leading space takes the cursor, which a focused field draws on the placeholder's first cell.
+ */
+const FOCUSED_PLACEHOLDER = ' start typing'
+const UNFOCUSED_PLACEHOLDER = 'ctrl+x tab to type'
 /** Live wpm swings in the first seconds, so the vs-PB color waits for this much active time. */
 const PB_MARK_AFTER_MS = 5000
 
@@ -36,8 +52,10 @@ export type GameViewProps = {
   readonly now: number
   /** The settings a pick in the picker starts from. */
   readonly settings: TypingSettings
-  /** Every word list read from `word-lists/`, in order: the label moves to the next. */
+  /** Every word list read from `word-lists/`. */
   readonly wordListNames: readonly string[]
+  /** The toolbar group showing its options, if any. */
+  readonly openOptions: OpenOptions
   /** The colors for the person's Claude Code theme. */
   readonly palette: Palette
 }
@@ -47,6 +65,7 @@ export type GameActions = {
   readonly onInput: (roundId: number, fieldIndex: number, fieldBaseLength: number, fieldBaseDropped: number, text: string) => void
   readonly onFinish: (roundId: number) => void
   readonly onChoose: (chosen: TypingSettings) => void
+  readonly onToggle: PickerActions['onToggle']
 }
 
 /** Green while live wpm is at or over the personal best of this test, yellow under it; none at first. */
@@ -75,10 +94,9 @@ const keyHint = ({ Text }: Pick<GameElements, 'Text'>, round: TypingRoundRunning
 
 /** The status after the field: `0:12  52 wpm  7 words  esc: hide`, nothing more. */
 const liveStatus = ({ Box, Text }: Pick<GameElements, 'Box' | 'Text'>, round: ActiveRound, now: number, palette: Palette) => {
+  // Before the first key the field itself says "start typing"; after it, only the weak pairs, if any.
   if (round.phase === 'ready') {
-    const practice = round.focusBigrams.length > 0 ? ` ⋅ your weak pairs: ${round.focusBigrams.join(' ')}` : ''
-
-    return <Text dimColor wrap={ONE_ROW}>{`start typing${practice}`}</Text>
+    return round.focusBigrams.length > 0 ? <Text dimColor wrap={ONE_ROW}>{`your weak pairs: ${round.focusBigrams.join(' ')}`}</Text> : null
   }
   if (isIdle(round, now)) {
     return (
@@ -124,17 +142,19 @@ export const gameView = (elements: GameElements, round: ActiveRound, props: Game
       <Box flexDirection="column" rowGap={ROW_GAP}>
         {lines.map(line => (
           <Box flexDirection="row">
-            {line.length === 0 ? <Text> </Text> : line.map(run => <Text {...letterProps[run.style]}>{run.text}</Text>)}
+            {line.length === 0 ? <Text> </Text> : line.map(run => (run.isInErrorWord ? <Text {...letterProps[run.style]} underline>{run.text}</Text> : <Text {...letterProps[run.style]}>{run.text}</Text>))}
           </Box>
         ))}
       </Box>
       <Box flexDirection="row" columnGap={2}>
         <Input
           key={`r${roundId}-f${fieldIndex}`}
-          // With the keys, a key lands here already, and the status says "start typing": no
-          // placeholder, which would read as a box to click. Without them, the way back.
-          placeholder={props.isFocused ? undefined : 'ctrl+x tab to type'}
-          submitLabel="finish"
+          // In the field, before its own `⏎ finish`: what to do now, then what Enter does. The
+          // first key replaces it. Without the keys, the way back to them.
+          placeholder={props.isFocused ? FOCUSED_PLACEHOLDER : UNFOCUSED_PLACEHOLDER}
+          // Empty for a fresh field; the word as cut for one drawn after keys past its end.
+          value={round.fieldValue === '' ? undefined : round.fieldValue}
+          submitLabel={SUBMIT_LABEL}
           autoFocus
           onInput={text => actions.onInput(roundId, fieldIndex, fieldBaseLength, droppedCharacters, text)}
           onSubmit={() => actions.onFinish(roundId)}
@@ -142,7 +162,12 @@ export const gameView = (elements: GameElements, round: ActiveRound, props: Game
         {liveStatus({ Box, Text }, round, props.now, props.palette)}
       </Box>
       {round.phase === 'ready' ? (
-        settingsPicker({ Box, Button, Text }, round, props.settings, props.wordListNames, props.palette, actions.onChoose)
+        settingsPicker(
+          { Box, Button, Text },
+          round,
+          { settings: props.settings, wordListNames: props.wordListNames, palette: props.palette, openOptions: props.openOptions },
+          { onChoose: actions.onChoose, onToggle: actions.onToggle },
+        )
       ) : (
         <Text> </Text>
       )}

@@ -48,6 +48,7 @@ const stubEngine = (on: On): void => {
 
     return { value: undefined }
   })
+  on('ui.focus', () => ({}))
   on('ui.panes', () => ({
     value: [...openPaneIds].map(id => ({ id, title: id, isShown: true, isFocused: true, isPlaced: true })),
   }))
@@ -90,9 +91,9 @@ describe('turntype', () => {
       const pane = await $.ui.mount({ plugin: 'turntype', surface, component: 'Pane', requestId: 'turntype', props: PANE_PROPS })
       expect(await pane.find({ type: 'Input', key: 'r1-f0' })).toBeDefined()
 
-      // The words rows hold only target text; the status row comes after them.
+      // The words rows hold only target text; the toolbar (`◍ english`) comes after them.
       const texts = (await pane.findAll({ type: 'Text' })).map(found => found.text)
-      const wordsText = texts.slice(0, texts.findIndex(text => text.includes('start typing'))).join('')
+      const wordsText = texts.slice(0, texts.findIndex(text => text.startsWith('◍'))).join('')
       const [firstWord = '', secondWord = '', thirdWord = ''] = wordsText.split(' ').filter(Boolean)
 
       await typeKeys(pane, 'r1-f0', `${firstWord} `)
@@ -212,7 +213,7 @@ describe('turntype', () => {
   })
 
   for (const surface of ['terminal', 'desktop'] as const) {
-    test(`${surface}: the picker: "time" selects its last count, "15" makes a time 15 test at once`, async ($, on) => {
+    test(`${surface}: the picker: "time" shows its counts, "15" makes a time 15 test at once and closes them`, async ($, on) => {
       const clock = mock.clock(on)
       stubEngine(on)
 
@@ -222,24 +223,24 @@ describe('turntype', () => {
       await band.press({ key: 'play' })
       const pane = await $.ui.mount({ plugin: 'turntype', surface, component: 'Pane', requestId: 'turntype', props: PANE_PROPS })
 
-      // The default flow test is on show: its mode bold text, the others dim buttons, and flow has no counts.
-      expect(await selectedOptions(pane)).toContain('flow')
-      expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { dimColor: true } })
+      // Closed: flow in use (bright), time and words dim with their counts, no counts on show.
+      expect((await pane.find({ type: 'Button', key: 'pick-flow' }))?.props['dimColor']).toBeUndefined()
+      expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { label: '◷ time (30)', dimColor: true } })
       expect(await pane.find({ type: 'Button', key: 'pick-time-15' })).toBeUndefined()
 
-      // "time" alone keeps the count it had: the default 30 is selected at once.
+      // "time" shows its counts and changes nothing yet.
       await pane.press({ key: 'pick-time' })
-      expect(await pane.find({ type: 'Input', key: 'r2-f0' })).toBeDefined()
-      expect(await selectedOptions(pane)).toContain('time')
-      expect(await selectedOptions(pane)).toContain('30')
+      expect(await pane.find({ type: 'Input', key: 'r1-f0' })).toBeDefined()
       expect(await pane.find({ type: 'Button', key: 'pick-time-15' })).toMatchObject({ props: { dimColor: true } })
 
+      // A count picks time with it at once, and the counts close.
       await pane.press({ key: 'pick-time-15' })
-      expect(await pane.find({ type: 'Input', key: 'r3-f0' })).toBeDefined()
-      expect(await selectedOptions(pane)).toContain('15')
+      expect(await pane.find({ type: 'Input', key: 'r2-f0' })).toBeDefined()
+      expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { label: '◷ time (15)' } })
+      expect(await pane.find({ type: 'Button', key: 'pick-time-15' })).toBeUndefined()
 
       // Once the first key is in, the picker gives its row to the key hints.
-      await pane.input({ key: 'r3-f0', text: 'x', kind: 'change' })
+      await pane.input({ key: 'r2-f0', text: 'x', kind: 'change' })
       expect(await pane.find({ key: 'pick-flow' })).toBeUndefined()
       expect(await pane.find({ type: 'Text', text: 'esc: hide' })).toBeDefined()
       await pane.unmount()

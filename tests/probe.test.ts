@@ -218,16 +218,17 @@ type PaneHandle = Mounted<Surface, 'Pane'>
 /** The field on show, as the person sees it: its key says the round and the field (`r1-f2`). */
 const fieldKey = async (pane: PaneHandle): Promise<string | undefined> => (await pane.find({ type: 'Input' }))?.key
 
-/** The underlined word in the words rows: the one to type next. */
-const currentWord = async (pane: PaneHandle): Promise<string> =>
-  (await pane.findAll({ type: 'Text' }))
-    .filter(found => found.props['underline'] === true)
-    .map(found => found.text)
-    .join('')
+/** The word to type next, read off the words rows from the yellow caret on its first letter to the next space. */
+const currentWord = async (pane: PaneHandle): Promise<string> => {
+  const texts = await pane.findAll({ type: 'Text' })
+  const caret = texts.findIndex(found => found.props['inverse'] === true)
+
+  return caret < 0 ? '' : texts.slice(caret).map(found => found.text).join('').split(' ')[0] ?? ''
+}
 
 const isFinished = async (pane: PaneHandle): Promise<boolean> => (await pane.find({ type: 'Button', key: 'again' })) !== undefined
 
-/** Types the underlined word and a space into the field on show, one key per change, as a player does. */
+/** Types the word at the caret and a space into the field on show, one key per change, as a player does. */
 const typeNextWord = async (pane: PaneHandle, mistype = false): Promise<void> => {
   const key = await fieldKey(pane)
   const word = await currentWord(pane)
@@ -374,6 +375,7 @@ describe('probe: result card', () => {
 
     // Flow needs 15 s of active time to be fair; a words test does not.
     await pane.press({ key: 'pick-words' })
+    await pane.press({ key: 'pick-words-25' })
     for (let index = 0; index < 25; index++) {
       await typeNextWord(pane)
     }
@@ -383,43 +385,59 @@ describe('probe: result card', () => {
 })
 
 describe('probe: picker', () => {
-  test('a mode alone keeps its last count; each pick is saved to userConfig once', async ($, on) => {
+  test('a press shows a group\'s options and picks nothing; a pick changes the test, closes them and is saved once', async ($, on) => {
     const clock = mock.clock(on)
     const world = stubWorld(on)
     const { pane } = await openFromBand($, clock)
 
     await pane.press({ key: 'pick-words' })
-    expect(await selectedOptions(pane)).toContain('25')
+    expect(await fieldKey(pane)).toBe('r1-f0')
+    expect(world.configWrites).toEqual([])
     await pane.press({ key: 'pick-words-50' })
+    expect(await pane.find({ type: 'Button', key: 'pick-words' })).toMatchObject({ props: { label: '☰ words (50)' } })
+    expect(await pane.find({ key: 'pick-words-10' })).toBeUndefined()
+
     await pane.press({ key: 'pick-time' })
-    expect(await selectedOptions(pane)).toContain('30')
-    // Back to words: the 50 picked before is kept, not the default.
-    await pane.press({ key: 'pick-words' })
-    expect(await selectedOptions(pane)).toContain('50')
-    // Each pick is a new round: flow was r1, then four picks.
-    expect(await fieldKey(pane)).toBe('r5-f0')
+    await pane.press({ key: 'pick-time-30' })
+    // Words keeps the 50 picked before, shown beside it while time is in use.
+    expect(await pane.find({ type: 'Button', key: 'pick-words' })).toMatchObject({ props: { label: '☰ words (50)', dimColor: true } })
+    await pane.press({ key: 'pick-flow' })
+    // Each pick is a new round: flow was r1, then three picks.
+    expect(await fieldKey(pane)).toBe('r4-f0')
 
     expect(world.configWrites).toEqual([
       { key: 'turntype.mode', value: 'words' },
       { key: 'turntype.wordCount', value: '50' },
       { key: 'turntype.mode', value: 'time' },
-      { key: 'turntype.mode', value: 'words' },
+      { key: 'turntype.mode', value: 'flow' },
     ])
   })
 
-  test('only one option is selected (bold, not a button) in each group', async ($, on) => {
+  test('one group open at a time; a press on the open one closes it and changes nothing', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+
+    await pane.press({ key: 'pick-time' })
+    expect(await pane.find({ key: 'pick-time-15' })).toBeDefined()
+    await pane.press({ key: 'pick-list' })
+    expect(await pane.find({ key: 'pick-time-15' })).toBeUndefined()
+    expect(await pane.find({ type: 'Button', key: 'pick-list' })).toMatchObject({ props: { label: 'english' } })
+    await pane.press({ key: 'pick-list' })
+    expect(await pane.find({ type: 'Button', key: 'pick-list' })).toMatchObject({ props: { label: 'english' } })
+    expect(await fieldKey(pane)).toBe('r1-f0')
+    expect(world.configWrites).toEqual([])
+  })
+
+  test('in an open group the count in use is yellow text, the others dim buttons', { options: { mode: 'time' } }, async ($, on) => {
     const clock = mock.clock(on)
     stubWorld(on)
     const { pane } = await openFromBand($, clock)
 
-    for (const mode of ['pick-time', 'pick-words', 'pick-flow']) {
-      await pane.press({ key: mode })
-      const selected = await selectedOptions(pane)
-      expect(selected, `selected after ${mode}`).toEqual(
-        mode === 'pick-flow' ? ['flow'] : mode === 'pick-time' ? ['time', '30'] : ['words', '25'],
-      )
-      expect(await pane.find({ type: 'Button', key: mode }), `${mode} is no button once selected`).toBeUndefined()
-    }
+    await pane.press({ key: 'pick-time' })
+    expect(await pane.find({ type: 'Text', text: /^30$/ })).toMatchObject({ props: { color: 'warning', bold: true } })
+    expect(await pane.find({ type: 'Button', key: 'pick-time-30' })).toBeUndefined()
+    expect(await pane.find({ type: 'Button', key: 'pick-time-60' })).toMatchObject({ props: { dimColor: true } })
   })
 })
 
@@ -684,7 +702,7 @@ describe('probe: /clear, /resume and /branch, and where nothing draws', () => {
 
     await $.classic.SessionStart({ source: 'clear' })
     const { pane } = await openFromBand($, clock)
-    expect(await pane.find({ type: 'Text', text: 'start typing ⋅ your weak pairs: th he' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: 'your weak pairs: th he' })).toBeDefined()
   })
 
   test('a start after compaction does not load again: only clear, resume and fork', async ($, on) => {
@@ -693,7 +711,8 @@ describe('probe: /clear, /resume and /branch, and where nothing draws', () => {
 
     await $.classic.SessionStart({ source: 'compact' })
     const { pane } = await openFromBand($, clock)
-    expect(await pane.find({ type: 'Text', text: 'start typing' })).toBeDefined()
+    expect(await pane.find({ type: 'Input' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /your weak pairs/ })).toBeUndefined()
   })
 
   test('after /clear a pane left open with no round is closed, not left empty', async ($, on) => {
@@ -778,6 +797,7 @@ describe('probe: the store, shared by every session', () => {
     }
     const { pane } = await openFromBand($, clock)
     await pane.press({ key: 'pick-words' })
+    await pane.press({ key: 'pick-words-25' })
     for (let index = 0; index < 25; index++) {
       await typeNextWord(pane)
     }
@@ -798,7 +818,7 @@ describe('probe: spaces before a word', () => {
     // Before the first key: the round stays ready, only the field is new.
     await pane.input({ key: 'r1-f0', text: ' ', kind: 'change' })
     expect(await fieldKey(pane)).toBe('r1-f1')
-    expect(await pane.find({ type: 'Text', text: /^start typing/ })).toBeDefined()
+    expect(await pane.find({ type: 'Input' })).toMatchObject({ props: { placeholder: ' start typing' } })
 
     // After a word: the extra space is dropped, and the next word is typed as usual.
     await typeNextWord(pane)
@@ -881,71 +901,130 @@ describe('probe: toolbar and word list', () => {
   const listFile = (prefix: string) => JSON.stringify({ words: Array.from({ length: 30 }, (_, index) => `${prefix}${index}`) })
   const SESSION = { cwd: '/', surface: 'terminal', isInteractive: true } as const
 
-  test('the list in the toolbar moves to the next list, starts a test with it, and saves the pick', async ($, on) => {
+  const LISTS = () => ({ 'english.json': listFile('eng'), 'english_10k.json': listFile('big'), 'english_1k.json': listFile('mid'), 'code.json': listFile('code') })
+  /** The list group's labels in order, as drawn: the toggle, then the lists while open. */
+  const listRow = async (pane: PaneHandle): Promise<string[]> => {
+    const found = await pane.findAll({})
+    const start = found.findIndex(element => element.text === '◍')
+    const end = found.findIndex((element, index) => index > start && element.text === '❘')
+
+    return found.slice(start + 1, end).filter(element => element.type === 'Text' || element.type === 'Button').map(element => element.text)
+  }
+
+  test('the list opens on a press, showing every other list by its short name; a pick starts a test with it, saves it and closes', async ($, on) => {
     const clock = mock.clock(on)
     const world = stubWorld(on)
-    world.wordListFiles = { 'english.json': listFile('eng'), 'code.json': listFile('code') }
+    world.wordListFiles = LISTS()
     await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)
 
-    // english first (the built-in list's place), then the files in name order: code.
-    expect(await pane.find({ type: 'Button', key: 'pick-list' })).toMatchObject({ props: { label: '◍ english' } })
+    expect(await listRow(pane)).toEqual(['english'])
     await pane.press({ key: 'pick-list' })
+    // english's family smallest first, then the others.
+    expect(await listRow(pane)).toEqual(['english', '1k', '10k', 'code'])
+
+    await pane.press({ key: 'pick-list-code' })
     expect(await currentWord(pane)).toMatch(/^code\d+$/)
-    expect(await pane.find({ type: 'Button', key: 'pick-list' })).toMatchObject({ props: { label: '◍ code' } })
+    expect(await listRow(pane)).toEqual(['code'])
     expect(world.configWrites).toEqual([{ key: 'turntype.wordList', value: 'code' }])
 
-    // And round again to english.
     await pane.press({ key: 'pick-list' })
-    expect(await currentWord(pane)).toMatch(/^eng\d+$/)
+    expect(await listRow(pane)).toEqual(['code', 'english', '1k', '10k'])
+    await pane.press({ key: 'pick-list-english_10k' })
+    expect(await currentWord(pane)).toMatch(/^big\d+$/)
+    // Closed, a size reads with its family.
+    expect(await listRow(pane)).toEqual(['english 10k'])
   })
 
   test('while a test runs the list cannot switch; on the result card it can', { options: { mode: 'words', wordCount: '10' } }, async ($, on) => {
     const clock = mock.clock(on)
     const world = stubWorld(on)
-    world.wordListFiles = { 'english.json': listFile('eng'), 'code.json': listFile('code') }
+    world.wordListFiles = LISTS()
     await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)
 
-    // While the test runs the toolbar row holds the key hints: no list to switch.
     await typeNextWord(pane)
     expect(await pane.find({ key: 'pick-list' })).toBeUndefined()
-    expect(await pane.find({ type: 'Text', text: '◍ english' })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: '◍' })).toBeUndefined()
 
     for (let index = 1; index < 10; index++) {
       await typeNextWord(pane)
     }
     expect(await isFinished(pane)).toBe(true)
     await pane.press({ key: 'pick-list' })
+    await pane.press({ key: 'pick-list-code' })
     expect(await currentWord(pane)).toMatch(/^code\d+$/)
   })
 
-  test('with one list the list in the toolbar is plain text', async ($, on) => {
+  test('with one list it opens to nothing else', async ($, on) => {
     const clock = mock.clock(on)
     stubWorld(on)
     const { pane } = await openFromBand($, clock)
 
-    expect(await pane.find({ key: 'pick-list' })).toBeUndefined()
-    expect(await pane.find({ type: 'Text', text: '◍ english' })).toBeDefined()
+    await pane.press({ key: 'pick-list' })
+    expect(await listRow(pane)).toEqual(['english'])
   })
 
-  test('the toolbar: modes with icons, the selected one and its count in yellow, the rest dim buttons', { options: { mode: 'time' } }, async ($, on) => {
+  // A pick saves to /config, and each config change reloads the mod: the reload draws the pane
+  // before session.start has read the list files again. Once read, the toolbar must draw again.
+  test('the lists read at session start reach a pane drawn before them, with no other change', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    world.wordListFiles = LISTS()
+    const { pane } = await openFromBand($, clock)
+    await pane.press({ key: 'pick-list' })
+    expect(await listRow(pane)).toEqual(['english'])
+
+    await $.session.start(SESSION)
+    expect(await listRow(pane)).toEqual(['english', '1k', '10k', 'code'])
+  })
+
+  test('/type with settings opens the game with them and saves them', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    world.wordListFiles = LISTS()
+    await $.session.start(SESSION)
+
+    expect(await $.command.run({ ...TYPE_COMMAND, args: 'time 60 10k' })).toEqual({})
+    const pane = await $.ui.mount({ plugin: GAME, surface: 'terminal', component: 'Pane', requestId: GAME, props: PANE_PROPS })
+    expect(await currentWord(pane)).toMatch(/^big\d+$/)
+    expect(await listRow(pane)).toEqual(['english 10k'])
+    expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { label: '◷ time (60)' } })
+    expect((await pane.find({ type: 'Button', key: 'pick-time' }))?.props['dimColor']).toBeUndefined()
+    expect(world.configWrites).toEqual([
+      { key: 'turntype.mode', value: 'time' },
+      { key: 'turntype.timeSeconds', value: '60' },
+      { key: 'turntype.wordList', value: 'english_10k' },
+    ])
+    void clock
+  })
+
+  test('/type with a word it does not know says so, and opens nothing', async ($, on) => {
+    const world = stubWorld(on)
+    world.wordListFiles = LISTS()
+    await $.session.start(SESSION)
+
+    expect(await $.command.run({ ...TYPE_COMMAND, args: 'code 45' })).toEqual({ text: 'unknown "45". Try /type code, /type time 30, /type words 50 10k' })
+    expect(world.configWrites).toEqual([])
+  })
+
+  test('the toolbar closed: the list, the modes with icons and counts, the mode in use bright, the rest dim', { options: { mode: 'time' } }, async ($, on) => {
     const clock = mock.clock(on)
     stubWorld(on)
     const { pane } = await openFromBand($, clock)
 
-    // Yellow and bold: the current word is yellow too, but underlined, not bold.
-    const yellow = (await pane.findAll({ type: 'Text' }))
-      .filter(found => found.props['color'] === 'warning' && found.props['bold'] === true)
-      .map(found => found.text)
-    expect(yellow).toEqual(['◷ time', '30'])
-    expect(await pane.find({ type: 'Button', key: 'pick-flow' })).toMatchObject({ props: { label: '∿ flow', dimColor: true } })
-    expect(await pane.find({ type: 'Button', key: 'pick-words' })).toMatchObject({ props: { label: '☰ words', dimColor: true } })
+    const buttons = (await pane.findAll({ type: 'Button' })).filter(found => found.key?.startsWith('pick-'))
+    expect(buttons.map(found => [found.text, found.props['dimColor'] === true])).toEqual([
+      ['english', false],
+      ['∿ flow', true],
+      ['◷ time (30)', false],
+      ['☰ words (25)', true],
+    ])
   })
 })
 
 describe('probe: band text', () => {
-  test('the invitation reads "press 1: type while you wait (flow)"', async ($, on) => {
+  test('the invitation reads "press 1: type while you wait"', async ($, on) => {
     const clock = mock.clock(on)
     stubWorld(on)
     await $.turn.start({ text: 'go', turnId: 'turn-1' })
@@ -956,14 +1035,20 @@ describe('probe: band text', () => {
       ...(await band.findAll({ type: 'Text' })).map(found => found.text),
       ...(await band.findAll({ type: 'Button' })).map(found => `${String(found.props['hotkey'])}: ${String(found.props['label'])}`),
     ]
-    expect(drawn).toEqual(['press', '(flow)', '1: type while you wait'])
+    expect(drawn).toEqual(['press', '1: type while you wait'])
   })
 })
 
 describe('probe: theme colors', () => {
   const SESSION = { cwd: '/', surface: 'terminal', isInteractive: true } as const
-  const selectedColor = async (pane: PaneHandle) =>
-    (await pane.findAll({ type: 'Text' })).find(found => found.text === '◷ time')?.props['color']
+  // The count in use, yellow in the open time group.
+  const selectedColor = async (pane: PaneHandle) => {
+    if ((await pane.find({ key: 'pick-time-15' })) === undefined) {
+      await pane.press({ key: 'pick-time' })
+    }
+
+    return (await pane.findAll({ type: 'Text' })).find(found => found.text === '30')?.props['color']
+  }
 
   test('in the dark theme the yellow is #FFCE1B; other themes keep the theme key', { options: { mode: 'time' } }, async ($, on) => {
     const clock = mock.clock(on)

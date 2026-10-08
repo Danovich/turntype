@@ -2,13 +2,13 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { TypingRound, TypingRoundFinished, TypingRoundReady, TypingRoundRunning } from '../types'
 import { applyProgressChanges, EMPTY_PROGRESS, parseLegacyProgress, progressChanges, recordResult, sparkline, weakBigrams } from '../hooks/engine/progress'
-import { FALLBACK_WORD_LIST, parseWordList, pickWords } from '../hooks/engine/word-list'
+import { FALLBACK_WORD_LIST, findWordListName, parseWordList, pickWords, wordListLabel, wordListOrder } from '../hooks/engine/word-list'
 import { applyFieldInput, createRound, expireRound, finishByPlayer, finishRound, ROUND_ENDING } from '../hooks/engine/round'
-import { DEFAULT_SETTINGS, parseTypingSettings } from '../hooks/engine/settings'
+import { DEFAULT_SETTINGS, parseTypeArguments, parseTypingSettings } from '../hooks/engine/settings'
 import { calculateResult, kogasa, liveWpm } from '../hooks/engine/stats'
 import { activeElapsedMs, isIdle } from '../hooks/engine/timing'
 import { parseTyped } from '../hooks/engine/typed-text'
-import { buildVisibleLines } from '../hooks/engine/layout'
+import { buildVisibleLines, LETTER_STYLE } from '../hooks/engine/layout'
 import { bigNumberRows } from '../hooks/engine/big-digits'
 import { EMPTY_FOLD, foldWindow } from '../hooks/engine/window'
 import { scoreWord, totalSamples } from '../hooks/engine/stats'
@@ -22,6 +22,7 @@ const READY: TypingRoundReady = {
   isClaudeDone: false,
   fieldIndex: 0,
   fieldBaseLength: 0,
+  fieldValue: '',
   focusBigrams: [],
   pbWpm: undefined,
   wordList: 'english',
@@ -67,6 +68,35 @@ describe('engine', () => {
     expect(afterExtraSpace.typed).toBe('the ')
     expect(afterExtraSpace.fieldIndex).toBe(running.fieldIndex + 1)
     expect(afterExtraSpace.correctKeystrokes).toBe(running.correctKeystrokes)
+  })
+
+  test('keys past a word\'s end are discarded: not typed, not scored, and a fresh field holds the word', async () => {
+    const full = asRunning(typeEvenly(READY, 'the', 0, 100))
+    expect(full.correctKeystrokes).toBe(3)
+    expect(full.fieldValue).toBe('')
+
+    // A fourth letter: not typed, not scored; the field (it shows the letter) is replaced by one holding "the".
+    const cut = asRunning(applyFieldInput(full, full.fieldIndex, full.fieldBaseLength, 'thex', 400))
+    expect(cut.typed).toBe('the')
+    expect(cut.correctKeystrokes).toBe(3)
+    expect(cut.incorrectKeystrokes).toBe(0)
+    expect(cut.fieldIndex).toBe(full.fieldIndex + 1)
+    expect(cut.fieldValue).toBe('the')
+
+    // A late key in the replaced field is not taken: the new field already holds text.
+    expect(applyFieldInput(cut, full.fieldIndex, full.fieldBaseLength, 'thexy', 450)).toBe(cut)
+
+    // In the new field a backspace edits as usual, and the field keeps its starting text.
+    const edited = asRunning(applyFieldInput(cut, cut.fieldIndex, cut.fieldBaseLength, 'th', 500))
+    expect(edited.typed).toBe('th')
+    expect(edited.fieldIndex).toBe(cut.fieldIndex)
+    expect(edited.fieldValue).toBe('the')
+
+    // Typed out again, a space commits the word as correct, and the next field starts empty.
+    const committed = asRunning(applyFieldInput(edited, edited.fieldIndex, edited.fieldBaseLength, 'the ', 600))
+    expect(committed.typed).toBe('the ')
+    expect(committed.fieldValue).toBe('')
+    expect(parseTyped(committed.typed).committedWords).toEqual(['the'])
   })
 
   test('a space opens a fresh field whose base is the committed text', async () => {
@@ -382,6 +412,33 @@ describe('adaptive words', () => {
   })
 })
 
+describe('word list names and /type', () => {
+  const NAMES = ['english', 'code', 'english_10k', 'english_1k', 'english_5k', 'german', 'german_1k', 'spare_parts']
+
+  test('the toolbar order: english and its sizes smallest first, then the others by name', async () => {
+    expect(wordListOrder(NAMES)).toEqual(['english', 'english_1k', 'english_5k', 'english_10k', 'code', 'german', 'german_1k', 'spare_parts'])
+  })
+
+  test('a size of a list on show is labelled by its suffix; any other name stays whole', async () => {
+    expect(NAMES.map(name => wordListLabel(name, NAMES))).toEqual(['english', 'code', '10k', '1k', '5k', 'german', '1k', 'spare_parts'])
+    // Labels can repeat across families: a name is found by its full name first, then by the first label.
+    expect(findWordListName('german_1k', NAMES)).toBe('german_1k')
+    expect(findWordListName('10k', NAMES)).toBe('english_10k')
+    expect(findWordListName('nope', NAMES)).toBeUndefined()
+  })
+
+  test('/type arguments in any order: a mode, a count that names its mode, a list', async () => {
+    const parse = (args: string) => parseTypeArguments(args, DEFAULT_SETTINGS, NAMES)
+
+    expect(parse('')).toEqual({ isValid: true, settings: DEFAULT_SETTINGS })
+    expect(parse('code')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, wordList: 'code' } })
+    expect(parse('10k time 60')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, mode: 'time', timeSeconds: 60, wordList: 'english_10k' } })
+    expect(parse('50')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, mode: 'words', wordCount: 50 } })
+    expect(parse('Words')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, mode: 'words' } })
+    expect(parse('time 45')).toEqual({ isValid: false, error: 'unknown "45"' })
+  })
+})
+
 describe('layout', () => {
   // Each word is 4 cells with its space, so a width of 8 holds two words a line.
   const WORDS = ['aaa', 'bbb', 'ccc', 'ddd', 'eee', 'fff', 'ggg']
@@ -397,6 +454,55 @@ describe('layout', () => {
     expect(lineTexts('')).toEqual(['aaa bbb', 'ccc ddd', 'eee fff'])
     expect(lineTexts('aaa bbb ')).toEqual(['aaa bbb', 'ccc ddd', 'eee fff'])
     expect(lineTexts('aaa bbb ccc ddd ')).toEqual(['ccc ddd', 'eee fff', 'ggg'])
+  })
+
+  // The run that holds the caret, by style: where the next key lands.
+  const caretRuns = (typed: string) =>
+    buildVisibleLines(WORDS, typed, 8, 3)
+      .flat()
+      .filter(run => run.style === LETTER_STYLE.caret || run.style === LETTER_STYLE.caretSpace)
+      .map(run => ({ text: run.text, style: run.style }))
+
+  test('the caret: on the next letter, then on the space once the word is typed out', async () => {
+    expect(caretRuns('')).toEqual([{ text: 'a', style: LETTER_STYLE.caret }])
+    expect(caretRuns('aaa bb')).toEqual([{ text: 'b', style: LETTER_STYLE.caret }])
+    expect(caretRuns('aaa bbb')).toEqual([{ text: ' ', style: LETTER_STYLE.caretSpace }])
+    // A wrong letter or a word typed too long moves the caret on all the same.
+    expect(caretRuns('aaa x')).toEqual([{ text: 'b', style: LETTER_STYLE.caret }])
+    expect(caretRuns('aaa bbbb')).toEqual([{ text: ' ', style: LETTER_STYLE.caretSpace }])
+  })
+
+  // The styles of one word's letters on show, by the word's position in WORDS.
+  const wordStyles = (typed: string, wordIndex: number) =>
+    buildVisibleLines(WORDS, typed, 8, 3)
+      .flat()
+      .flatMap(run => [...run.text].map(() => run.style))
+      .filter((_, cell) => Math.floor(cell / 4) === wordIndex % 2 && cell % 4 < 3)
+
+  test('a word typed too long stays red once committed, as it was while typed', async () => {
+    // "aaa" right, then "bbb" with extra letters: every letter of "bbb" red, before and after the space.
+    expect(wordStyles('aaa bbbxx', 1)).toEqual([LETTER_STYLE.currentIncorrect, LETTER_STYLE.currentIncorrect, LETTER_STYLE.currentIncorrect])
+    expect(wordStyles('aaa bbbxx ', 1)).toEqual([LETTER_STYLE.incorrect, LETTER_STYLE.incorrect, LETTER_STYLE.incorrect])
+    expect(wordStyles('aaa bbbxx ', 0)).toEqual([LETTER_STYLE.correct, LETTER_STYLE.correct, LETTER_STYLE.correct])
+  })
+
+  // Each word's underline, by the word's position in WORDS (each is 3 letters and a space).
+  const errorWords = (typed: string) =>
+    buildVisibleLines(WORDS, typed, 8, 3)
+      .flat()
+      .flatMap(run => [...run.text].map(() => run.isInErrorWord))
+      .filter((_, cell) => cell % 4 < 3)
+      .filter((_, letter) => letter % 3 === 0)
+
+  test('a word is underlined only when it has a mistake; the space between words never is', async () => {
+    // aaa right ⋅ bbb with a wrong letter ⋅ ccc short (a letter skipped) ⋅ ddd current, on track.
+    expect(errorWords('aaa bxb cc dd').slice(0, 4)).toEqual([false, true, true, false])
+    // The current word slips: underlined at once.
+    expect(errorWords('aaa bx').slice(0, 2)).toEqual([false, true])
+    // The space after a word with a mistake is drawn without the underline.
+    const spaceRuns = buildVisibleLines(WORDS, 'axa ', 8, 3).flat().filter(run => run.text.trim() === '')
+    expect(spaceRuns.length).toBeGreaterThan(0)
+    expect(spaceRuns.some(run => run.isInErrorWord)).toBe(false)
   })
 
   test('big digits: three rows, three cells a digit and one between', async () => {
@@ -489,7 +595,8 @@ describe('window', () => {
 describe('long flow', () => {
   const LONG_WORDS = Array.from({ length: 4000 }, (_, index) => ['alpha', 'be', 'cat', 'dog'][index % 4] ?? 'alpha')
   const READY_LONG: TypingRoundReady = { ...READY, targetWords: LONG_WORDS }
-  const typedWord = (index: number) => (index % 10 === 3 ? `x${LONG_WORDS[index]}` : (LONG_WORDS[index] ?? ''))
+  // Every tenth word wrong in its first letter: the same length, as no key past a word's end is typed.
+  const typedWord = (index: number) => (index % 10 === 3 ? `x${LONG_WORDS[index]?.slice(1) ?? ''}` : (LONG_WORDS[index] ?? ''))
   const typedText = (count: number) => Array.from({ length: count }, (_, index) => typedWord(index)).join(' ') + ' '
 
   test('3000 words fold several times and score exactly as the whole text would', async () => {

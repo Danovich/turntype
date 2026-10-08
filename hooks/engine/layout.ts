@@ -12,22 +12,39 @@ export const LETTER_STYLE = {
   currentCorrect: 'currentCorrect',
   currentIncorrect: 'currentIncorrect',
   currentUntyped: 'currentUntyped',
+  /** The next letter to type, in the current word. */
+  caret: 'caret',
+  /** The space after a current word typed out: the next key is the space. */
+  caretSpace: 'caretSpace',
   space: 'space',
 } as const
 
 export type LetterStyle = (typeof LETTER_STYLE)[keyof typeof LETTER_STYLE]
 
-/** Neighbouring letters of one style, drawn as one Text. */
-export type LetterRun = { readonly text: string; readonly style: LetterStyle }
+/**
+ * Neighbouring letters of one style, drawn as one Text. `isInErrorWord`: the letters belong to a word
+ * with a mistake in it (a wrong, skipped or extra letter), which is underlined; its space is not.
+ */
+export type LetterRun = { readonly text: string; readonly style: LetterStyle; readonly isInErrorWord: boolean }
+
+/** A word as typed has a mistake: committed, unless it is the target exactly; current, once it leaves the target's start. */
+const hasError = (typedWord: string | undefined, targetWord: string, isCommitted: boolean): boolean =>
+  typedWord !== undefined && (isCommitted ? typedWord !== targetWord : !targetWord.startsWith(typedWord))
 
 export type VisibleLine = readonly LetterRun[]
 
-const committedLetterStyle = (typedCharacter: string | undefined, targetCharacter: string): LetterStyle => {
+/** As the word was typed; a word typed too long stays all wrong, as it was while it was current. */
+const committedLetterStyle = (typedWord: string, index: number, targetWord: string): LetterStyle => {
+  const typedCharacter = typedWord[index]
+
+  if (typedWord.length > targetWord.length) {
+    return LETTER_STYLE.incorrect
+  }
   if (typedCharacter === undefined) {
     return LETTER_STYLE.missed
   }
 
-  return typedCharacter === targetCharacter ? LETTER_STYLE.correct : LETTER_STYLE.incorrect
+  return typedCharacter === targetWord[index] ? LETTER_STYLE.correct : LETTER_STYLE.incorrect
 }
 
 /** Letters past the typed text stay highlighted; a word typed too long marks every letter wrong. */
@@ -38,21 +55,25 @@ const currentLetterStyle = (typedWord: string, index: number, targetWord: string
     return LETTER_STYLE.currentIncorrect
   }
   if (typedCharacter === undefined) {
-    return LETTER_STYLE.currentUntyped
+    return index === typedWord.length ? LETTER_STYLE.caret : LETTER_STYLE.currentUntyped
   }
 
   return typedCharacter === targetWord[index] ? LETTER_STYLE.currentCorrect : LETTER_STYLE.currentIncorrect
 }
 
-const wordLetters = (targetWord: string, typedWord: string | undefined, isCommitted: boolean, isCurrent: boolean): LetterRun[] =>
-  [...targetWord].map((targetCharacter, index) => ({
+const wordLetters = (targetWord: string, typedWord: string | undefined, isCommitted: boolean, isCurrent: boolean): LetterRun[] => {
+  const isInErrorWord = (isCommitted || isCurrent) && hasError(typedWord, targetWord, isCommitted)
+
+  return [...targetWord].map((targetCharacter, index) => ({
     text: targetCharacter,
     style: isCurrent
       ? currentLetterStyle(typedWord ?? '', index, targetWord)
       : isCommitted
-        ? committedLetterStyle(typedWord?.[index], targetCharacter)
+        ? committedLetterStyle(typedWord ?? '', index, targetWord)
         : LETTER_STYLE.untyped,
+    isInErrorWord,
   }))
+}
 
 /** Local accumulation keeps this O(n) per line; the result is never mutated after return. */
 const mergeRuns = (letters: readonly LetterRun[]): VisibleLine => {
@@ -61,8 +82,8 @@ const mergeRuns = (letters: readonly LetterRun[]): VisibleLine => {
   for (const letter of letters) {
     const lastRun = runs.at(-1)
 
-    if (lastRun !== undefined && lastRun.style === letter.style) {
-      runs[runs.length - 1] = { text: lastRun.text + letter.text, style: lastRun.style }
+    if (lastRun !== undefined && lastRun.style === letter.style && lastRun.isInErrorWord === letter.isInErrorWord) {
+      runs[runs.length - 1] = { ...lastRun, text: lastRun.text + letter.text }
     } else {
       runs.push(letter)
     }
@@ -109,10 +130,13 @@ export const buildVisibleLines = (
     const endIndex = lineStarts[firstLine + offset + 1] ?? targetWords.length
     const letters = targetWords.slice(startIndex, endIndex).flatMap((targetWord, position) => {
       const index = startIndex + position
+      const isCurrent = index === currentIndex
+      // A typed-out (or too long) current word: the next key is the space, so the caret sits on it.
+      const isCaretOnSpace = isCurrent && currentWord.length >= targetWord.length
 
       return [
-        ...wordLetters(targetWord, typedWordAt(index), index < currentIndex, index === currentIndex),
-        { text: ' ', style: LETTER_STYLE.space },
+        ...wordLetters(targetWord, typedWordAt(index), index < currentIndex, isCurrent),
+        { text: ' ', style: isCaretOnSpace ? LETTER_STYLE.caretSpace : LETTER_STYLE.space, isInErrorWord: false },
       ]
     })
 

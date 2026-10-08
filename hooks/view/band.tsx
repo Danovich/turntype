@@ -1,6 +1,6 @@
 import type { TypingRoundFinished } from '../../types'
 import type { Palette } from './palette'
-import { modeLabel, progressLabel } from './shared'
+import { progressLabel } from './shared'
 import type { ActiveRound, GameElements } from './shared'
 
 type BandElements = Pick<GameElements, 'Box' | 'Button' | 'Text'>
@@ -45,14 +45,8 @@ export const resultBand = (elements: BandElements, round: TypingRoundFinished, p
 
 /** The invitation while Claude works, or a test in progress waiting while the pane is closed. */
 export const invitationBand = (elements: BandElements, round: ActiveRound, onOpen: () => void) => {
-  const { Box, Text } = elements
   const label = round.phase === 'running' ? `continue ⋅ ${progressLabel(round)}` : 'type while you wait'
 
-  // One space: the mode belongs to the same phrase, `press 1: type while you wait (flow)`.
-  return (
-    <Box flexDirection="row" columnGap={1}>
-      {pressOne(elements, 'play', label, onOpen)}
-      <Text dimColor>{`(${modeLabel(round)})`}</Text>
-    </Box>
-  )
+  // The invitation alone, `press 1: type while you wait`: the mode shows in the pane.
+  return pressOne(elements, 'play', label, onOpen)
 }
