@@ -18,9 +18,16 @@ export const PICKED_SETTINGS_KEY = 'settings'
 /** What a pick saves: the picked fields alone. */
 export const picksOf = (settings: TypingSettings): TypingPicks => ({ mode: settings.mode, counts: settings.counts, wordList: settings.wordList })
 
-/** The settings in use: the picks over the defaults, or the defaults alone. */
-export const settingsInUse = (defaults: TypingSettings, picks: TypingPicks | null): TypingSettings =>
-  picks === null ? defaults : { ...defaults, ...picks }
+/**
+ * The settings in use: the picks over the defaults. A picked list whose file is gone (deleted from
+ * `word-lists/`) gives way to the default list, so the toolbar and the personal bests never name
+ * a list the words do not come from. The pick stays saved: the list is back when its file is.
+ */
+export const settingsInUse = (defaults: TypingSettings, picks: TypingPicks | null, isLoadedList: (name: string) => boolean): TypingSettings => {
+  const settings = picks === null ? defaults : { ...defaults, ...picks }
+
+  return isLoadedList(settings.wordList) ? settings : { ...settings, wordList: DEFAULT_WORD_LIST }
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 

@@ -136,7 +136,8 @@ let defaultSettings: TypingSettings = DEFAULT_SETTINGS
 let dailyGoalMinutes: number | undefined
 
 /** The settings in use: the picks over the defaults. */
-const readSettings = async (dollar: Dollar): Promise<TypingSettings> => settingsInUse(defaultSettings, await read(dollar, picksAtom))
+const readSettings = async (dollar: Dollar): Promise<TypingSettings> =>
+  settingsInUse(defaultSettings, await read(dollar, picksAtom), name => wordLists.has(name))
 
 /** Copies the saved picks into state, where a drawing reads them. At start and after /clear. */
 const loadPicks = async (dollar: Dollar): Promise<void> => {

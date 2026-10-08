@@ -4,7 +4,7 @@ import type { TypingRound, TypingRoundFinished, TypingRoundReady, TypingRoundRun
 import { applyProgressChanges, dayStanding, EMPTY_PROGRESS, milestonesReached, parseLegacyProgress, progressChanges, recordResult, sparkline, todayPractice, weakBigrams } from '../hooks/engine/progress'
 import { FALLBACK_WORD_LIST, parseWordList, pickWords, wordListOrder } from '../hooks/engine/word-list'
 import { applyFieldInput, createRound, expireRound, finishByPlayer, finishRound, ROUND_ENDING } from '../hooks/engine/round'
-import { DEFAULT_SETTINGS, parseDailyGoalMinutes, parseSavedPicks, parseTypingSettings } from '../hooks/engine/settings'
+import { DEFAULT_SETTINGS, parseDailyGoalMinutes, parseSavedPicks, parseTypingSettings, settingsInUse } from '../hooks/engine/settings'
 import { COUNTED_MODES, MODES } from '../hooks/engine/modes'
 import { calculateResult, kogasa, liveWpm } from '../hooks/engine/stats'
 import { activeElapsedMs, isIdle } from '../hooks/engine/timing'
@@ -418,6 +418,13 @@ describe('progress', () => {
     expect(resultToast(round, newBest, ['first 60 wpm test'])).toBe('✦ new personal best: 61 wpm ⋅ time 30 ⋅ first 60 wpm test')
     expect(resultToast(round, summary, ['7-day streak'])).toBe('✦ 7-day streak')
     expect(resultToast(round, summary, [])).toBeUndefined()
+  })
+
+  test('a picked list whose file is gone: the default list is in use, the other picks stay', async () => {
+    const picks = { mode: 'time', counts: DEFAULT_SETTINGS.counts, wordList: 'code' } as const
+
+    expect(settingsInUse(DEFAULT_SETTINGS, picks, name => name === 'code')).toMatchObject({ mode: 'time', wordList: 'code' })
+    expect(settingsInUse(DEFAULT_SETTINGS, picks, name => name === 'english')).toMatchObject({ mode: 'time', wordList: 'english' })
   })
 
   test('the daily goal from /config: minutes, or off', async () => {
