@@ -52,9 +52,17 @@ export type GameViewProps = {
   readonly picker: PickerProps | undefined
 }
 
+/** Where a field drew its text from: its round, its index, and its base as drawn. */
+export type FieldAsDrawn = {
+  readonly roundId: number
+  readonly fieldIndex: number
+  readonly fieldBaseLength: number
+  /** How much the window had folded when the field was drawn. */
+  readonly fieldBaseDropped: number
+}
+
 export type GameActions = {
-  /** `fieldBaseDropped`: how much the window had folded when the field was drawn. */
-  readonly onInput: (roundId: number, fieldIndex: number, fieldBaseLength: number, fieldBaseDropped: number, text: string) => void
+  readonly onInput: (field: FieldAsDrawn, text: string) => void
   readonly onFinish: (roundId: number) => void
   readonly picker: PickerActions
 }
@@ -120,8 +128,8 @@ export const gameView = (elements: GameElements, round: ActiveRound, props: Game
   const { Box, Button, Input, Text } = elements
   const typed = round.phase === 'running' ? round.typed : ''
   const lines = buildVisibleLines(round.targetWords, typed, props.bodyColumns, WORD_LINE_COUNT)
-  const { roundId, fieldIndex, fieldBaseLength } = round
-  const { droppedCharacters } = foldOf(round)
+  const { roundId, fieldIndex } = round
+  const field: FieldAsDrawn = { roundId, fieldIndex, fieldBaseLength: round.fieldBaseLength, fieldBaseDropped: foldOf(round).droppedCharacters }
   const letterProps = letterTextProps(props.palette)
 
   return (
@@ -143,7 +151,7 @@ export const gameView = (elements: GameElements, round: ActiveRound, props: Game
           value={round.fieldValue === '' ? undefined : round.fieldValue}
           submitLabel={SUBMIT_LABEL}
           autoFocus
-          onInput={text => actions.onInput(roundId, fieldIndex, fieldBaseLength, droppedCharacters, text)}
+          onInput={text => actions.onInput(field, text)}
           onSubmit={() => actions.onFinish(roundId)}
         />
         {liveStatus({ Box, Text }, round, props.now, props.palette)}
