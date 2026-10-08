@@ -1,8 +1,8 @@
 import type { Elements } from 'claude-code'
 
 import type { TypingRound, TypingRoundRunning } from '../../types'
-import { TYPING_MODE } from '../engine/settings'
-import { committedWordCount, totalTargetWords } from '../engine/window'
+import { MODES } from '../engine/modes'
+import { committedWordCount } from '../engine/window'
 
 /** The elements the views draw with, as `$.ui.resolve(e)` hands them on a surface that has `Input`. */
 export type GameElements = Pick<Elements['terminal'], 'Box' | 'Button' | 'Input' | 'Text'>
@@ -21,16 +21,12 @@ export const formatClock = (durationMs: number): string => {
   return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, '0')}`
 }
 
-export const modeLabel = (round: TypingRound): string => {
-  if (round.mode === TYPING_MODE.words) {
-    return `words ${totalTargetWords(round)}`
-  }
-
-  return round.mode === TYPING_MODE.time ? `time ${round.timeLimitMs / 1000}` : 'flow'
-}
+/** The mode and its count: `time 30`, `words 25`, `flow`. */
+export const modeLabel = (round: TypingRound): string => (round.count === undefined ? round.mode : `${round.mode} ${round.count}`)
 
 export const progressLabel = (round: TypingRoundRunning): string => {
   const committedCount = committedWordCount(round)
 
-  return round.mode === TYPING_MODE.words ? `${committedCount}/${totalTargetWords(round)}` : `${committedCount} ${committedCount === 1 ? 'word' : 'words'}`
+  // Out of the count where the test ends on its last word; else the words so far.
+  return MODES[round.mode].endsWhen === 'lastWord' ? `${committedCount}/${round.count}` : `${committedCount} ${committedCount === 1 ? 'word' : 'words'}`
 }

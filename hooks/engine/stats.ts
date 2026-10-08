@@ -1,5 +1,6 @@
 import type { TypingCharCounts, TypingResult, TypingRoundEnding, TypingRoundRunning, TypingSampleTotals } from '../../types'
 
+import { timeLimitMs } from './timing'
 import { parseTyped } from './typed-text'
 
 const MIN_DURATION_MS = 1000
@@ -86,7 +87,7 @@ export const countCorrectWordCharacters = (typed: string, targetWords: readonly 
  */
 const resultDurationMs = (round: TypingRoundRunning, ending: TypingRoundEnding): number =>
   ending === 'timeUp'
-    ? round.timeLimitMs
+    ? timeLimitMs(round)
     : Math.max(MIN_DURATION_MS, round.lastInputAt - round.startedAt - round.pausedMs)
 
 /** Live wpm from the running counter: O(1), so a key or a tick never scores the whole text. */

@@ -22,13 +22,13 @@ import {
   parseSavedPicks,
   parseTypeArguments,
   parseTypingSettings,
-  PICKED_CONFIG_KEYS,
   PICKED_SETTINGS_KEY,
   picksOf,
   settingsInUse,
 } from './engine/settings'
 import { isIdle, isTimeUp } from './engine/timing'
-import { DEFAULT_WORD_LIST_NAME, FALLBACK_WORD_LIST, parseWordList } from './engine/word-list'
+import { DEFAULT_WORD_LIST, TYPE_ARGUMENT_HINT } from './engine/modes'
+import { FALLBACK_WORD_LIST, parseWordList } from './engine/word-list'
 import type { WordList } from './engine/word-list'
 import { backToTypingBand, invitationBand, resultBand } from './view/band'
 import { gameView } from './view/game'
@@ -70,7 +70,8 @@ type Dollar = EngineInterface
 let ticker: Timer | undefined
 let refocusTimer: Timer | undefined
 let pendingTurnId: string | undefined
-// The /config defaults (userConfig), under the saved picks. A change in /config reloads the module, so register reads them again.
+// The settings before any pick: the defaults of modes.ts, adaptive words from /config (a change there
+// reloads the module, so register reads it again).
 let defaultSettings: TypingSettings = DEFAULT_SETTINGS
 // The word lists, read from files at session.start (and so on each reload). Not $.state: a round
 // names its list, and $.state would copy every list across the host boundary on each read.
@@ -86,9 +87,9 @@ const THEME_CONFIG_KEY = 'theme'
 
 const nextRoundId = (round: TypingRound | null): number => (round?.roundId ?? 0) + 1
 
-/** The list by name; an unknown name (a list since removed, a typo in /config) gets English. */
+/** The list by name; an unknown name (a saved pick of a list since removed) gets English. */
 const wordListFor = (name: string): WordList =>
-  wordLists.get(name) ?? wordLists.get(DEFAULT_WORD_LIST_NAME) ?? FALLBACK_WORD_LIST
+  wordLists.get(name) ?? wordLists.get(DEFAULT_WORD_LIST) ?? FALLBACK_WORD_LIST
 
 const stopTicker = (): void => {
   ticker?.cancel()
@@ -299,7 +300,7 @@ const handleFinish = (dollar: Dollar, roundId: number): void => {
  * Makes rounds with `chosen`, the weak letter pairs and the personal best, read once here: the
  * change itself stays synchronous, and a round carries its personal best so a key reads nothing else.
  */
-/** The settings in use, derived: the picks over the /config defaults. */
+/** The settings in use, derived: the picks over the defaults. */
 const readSettings = async (dollar: Dollar): Promise<TypingSettings> => settingsInUse(defaultSettings, await read(dollar, picksAtom))
 
 const roundMaker = async (dollar: Dollar, given?: TypingSettings) => {
@@ -326,7 +327,7 @@ const loadPicks = async (dollar: Dollar): Promise<void> => {
     const picks = parseSavedPicks(await dollar.store.get(PICKED_SETTINGS_KEY), defaultSettings)
     await update(dollar, picksAtom, () => picks)
   } catch {
-    // No store: the /config defaults alone.
+    // No store: the defaults alone.
   }
 }
 
@@ -483,7 +484,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'type',
       description: 'Type while Claude works: open the turntype game',
-      argumentHint: '[list] [flow | time 15–120 | words 10–100]',
+      argumentHint: TYPE_ARGUMENT_HINT,
       immediate: true,
     })
 
@@ -496,14 +497,6 @@ export const register: Register = (on, options) => {
     palette = paletteFor(typeof e.value === 'string' ? e.value : '')
 
     return result
-  }).catch(($, e, next) => next(e))
-
-  // A turntype default changed in /config: the saved picks go first, so the new default is the one
-  // in use after the reload the change brings. Before next(e): the reload may follow at once.
-  on('config.set', { key: PICKED_CONFIG_KEYS }, async ($, e, next) => {
-    await $.store.delete(PICKED_SETTINGS_KEY)
-
-    return next(e)
   }).catch(($, e, next) => next(e))
 
   // /clear, /resume and /branch reset $.state without a new session.start: load and match again.

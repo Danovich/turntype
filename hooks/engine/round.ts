@@ -8,7 +8,8 @@ import type {
   TypingSettings,
 } from '../../types'
 
-import { TYPING_MODE } from './settings'
+import { isEndless, MODES } from './modes'
+import { countOf } from './settings'
 import { calculateResult, countCorrectWordCharacters } from './stats'
 import { activeElapsedMs, isTimeUp, pausedPartOfGap } from './timing'
 import { parseTyped } from './typed-text'
@@ -30,9 +31,6 @@ const LOOKAHEAD_WORDS = 20
  */
 export const MAX_CHARACTERS_PER_INPUT = 3
 
-/** Modes with no word limit: words are added ahead of the player as they type. */
-const isEndless = (round: TypingRoundBase): boolean => round.mode !== TYPING_MODE.words
-
 /**
  * A new round with words from `wordList`; `weakBigrams` are the player's weak letter pairs, practiced
  * when adaptive words are on. The round keeps only the list's name: a key then copies no word list.
@@ -44,13 +42,15 @@ export const createRound = (
   wordList: WordList = FALLBACK_WORD_LIST,
 ): TypingRoundReady => {
   const focusBigrams = settings.isAdaptive ? weakBigrams : []
+  const count = countOf(settings)
 
   return {
     roundId,
     mode: settings.mode,
-    timeLimitMs: settings.timeSeconds * 1000,
+    count,
     phase: 'ready',
-    targetWords: pickWords(wordList.words, settings.mode === TYPING_MODE.words ? settings.wordCount : INITIAL_ENDLESS_WORDS, undefined, focusBigrams),
+    // An endless test starts with enough words to fill the rows; one that ends on its last word has its count.
+    targetWords: pickWords(wordList.words, isEndless(settings.mode) ? INITIAL_ENDLESS_WORDS : (count ?? INITIAL_ENDLESS_WORDS), undefined, focusBigrams),
     isClaudeDone: false,
     fieldIndex: 0,
     fieldBaseLength: 0,
@@ -140,7 +140,7 @@ const addBigramErrors = (
 export const finishRound = (round: TypingRoundRunning, ending: TypingRoundEnding): TypingRoundFinished => ({
   roundId: round.roundId,
   mode: round.mode,
-  timeLimitMs: round.timeLimitMs,
+  count: round.count,
   targetWords: round.targetWords,
   isClaudeDone: round.isClaudeDone,
   fieldIndex: round.fieldIndex,
@@ -159,11 +159,12 @@ export const finishRound = (round: TypingRoundRunning, ending: TypingRoundEnding
   progress: undefined,
 })
 
-/** The player ends the test (Enter). Flow has no end of its own, so there it is a complete test. */
+/** The player ends the test (Enter): complete in a mode with no end of its own (flow), else early. */
 export const finishByPlayer = (round: TypingRoundRunning): TypingRoundFinished =>
-  finishRound(round, round.mode === TYPING_MODE.flow ? ROUND_ENDING.complete : ROUND_ENDING.early)
+  finishRound(round, MODES[round.mode].enterEnds === 'complete' ? ROUND_ENDING.complete : ROUND_ENDING.early)
 
-const isWordsModeComplete = (round: TypingRoundRunning, tally: KeystrokeTally): boolean => {
+/** The last word typed: committed, or its last letter in place (no space needed after the last word). */
+const isLastWordTyped = (round: TypingRoundRunning, tally: KeystrokeTally): boolean => {
   const lastTargetWord = round.targetWords.at(-1)
 
   return (
@@ -271,11 +272,11 @@ export const applyFieldInput = (
   const started = round.phase === 'running' ? round : undefined
   const startedAt = started?.startedAt ?? now
   const pausedMs = (started?.pausedMs ?? 0) + (started ? pausedPartOfGap(now - started.lastInputAt) : 0)
-  const needsMoreWords = isEndless(round) && tally.committedCount + LOOKAHEAD_WORDS > round.targetWords.length
+  const needsMoreWords = isEndless(round.mode) && tally.committedCount + LOOKAHEAD_WORDS > round.targetWords.length
   const running: TypingRoundRunning = {
     roundId: round.roundId,
     mode: round.mode,
-    timeLimitMs: round.timeLimitMs,
+    count: round.count,
     isClaudeDone: round.isClaudeDone,
     focusBigrams: round.focusBigrams,
     pbWpm: round.pbWpm,
@@ -308,10 +309,9 @@ export const applyFieldInput = (
     keystrokesPerSecond: addToSecond(running.keystrokesPerSecond, secondIndex, keystrokes),
   }
 
-  if (sampled.mode === TYPING_MODE.words && isWordsModeComplete(sampled, tally)) {
-    return finishRound(sampled, ROUND_ENDING.complete)
-  }
-  if (sampled.mode === TYPING_MODE.flow && sampled.isClaudeDone && tally.didCommit) {
+  // The mode's own end: its last word, or Claude done and the word completed.
+  const { endsWhen } = MODES[sampled.mode]
+  if ((endsWhen === 'lastWord' && isLastWordTyped(sampled, tally)) || (endsWhen === 'claudeDone' && sampled.isClaudeDone && tally.didCommit)) {
     return finishRound(sampled, ROUND_ENDING.complete)
   }
 

@@ -4,7 +4,8 @@ import type { TypingRound, TypingRoundFinished, TypingRoundReady, TypingRoundRun
 import { applyProgressChanges, EMPTY_PROGRESS, parseLegacyProgress, progressChanges, recordResult, sparkline, weakBigrams } from '../hooks/engine/progress'
 import { FALLBACK_WORD_LIST, findWordListName, parseWordList, pickWords, wordListLabel, wordListOrder } from '../hooks/engine/word-list'
 import { applyFieldInput, createRound, expireRound, finishByPlayer, finishRound, ROUND_ENDING } from '../hooks/engine/round'
-import { DEFAULT_SETTINGS, parseTypeArguments, parseTypingSettings } from '../hooks/engine/settings'
+import { DEFAULT_SETTINGS, parseSavedPicks, parseTypeArguments, parseTypingSettings } from '../hooks/engine/settings'
+import { COUNTED_MODES, MODES, TYPE_ARGUMENT_HINT } from '../hooks/engine/modes'
 import { calculateResult, kogasa, liveWpm } from '../hooks/engine/stats'
 import { activeElapsedMs, isIdle } from '../hooks/engine/timing'
 import { parseTyped } from '../hooks/engine/typed-text'
@@ -17,7 +18,7 @@ import { scoreWord, totalSamples } from '../hooks/engine/stats'
 const READY: TypingRoundReady = {
   roundId: 1,
   mode: 'flow',
-  timeLimitMs: 30_000,
+  count: undefined,
   phase: 'ready',
   targetWords: ['the', 'quick', 'brown', 'fox', 'jumps', 'over', 'lazy', 'dog'],
   isClaudeDone: false,
@@ -179,7 +180,7 @@ describe('engine', () => {
   })
 
   test('time mode: ends at the limit of active time, measured over exactly the limit', async () => {
-    const timed: TypingRoundReady = { ...READY, mode: 'time', timeLimitMs: 15_000 }
+    const timed: TypingRoundReady = { ...READY, mode: 'time', count: 15 }
     // 6 keys, 2.8 s apart (under the idle limit): the last one lands at 14 s of active time.
     const nearEnd = asRunning(typeEvenly(timed, 'the qu', 0, 2800))
 
@@ -197,7 +198,7 @@ describe('engine', () => {
   })
 
   test('time mode ended early with Enter: measured over the active time, not the limit', async () => {
-    const timed: TypingRoundReady = { ...READY, mode: 'time', timeLimitMs: 30_000 }
+    const timed: TypingRoundReady = { ...READY, mode: 'time', count: 30 }
     const typed = asRunning(typeEvenly(timed, 'the quick ', 0, 6000 / 9))
     const ended = finishByPlayer(typed)
 
@@ -216,18 +217,38 @@ describe('engine', () => {
     expect(withoutSpace.correctWordCharacters).toBe(4)
   })
 
-  test('settings: userConfig strings become numbers; odd values fall back to defaults', async () => {
-    expect(parseTypingSettings({ mode: 'time', wordCount: '50', timeSeconds: '15', adaptive: 'off' })).toEqual({
+  test('settings: the defaults come from the mode table; /config gives adaptive alone', async () => {
+    expect(DEFAULT_SETTINGS).toEqual({ mode: 'flow', counts: { time: 30, words: 25 }, isAdaptive: true, wordList: 'english' })
+    expect(parseTypingSettings({ adaptive: 'off' })).toEqual({ ...DEFAULT_SETTINGS, isAdaptive: false })
+    // The rows /config no longer has are left alone, whatever an old settings file holds.
+    expect(parseTypingSettings({ mode: 'time', wordList: 'code' })).toEqual(DEFAULT_SETTINGS)
+  })
+
+  test('saved picks: read back over the defaults; the shape before counts per mode is read too', async () => {
+    expect(parseSavedPicks(undefined, DEFAULT_SETTINGS)).toBeNull()
+    expect(parseSavedPicks({ mode: 'time', counts: { time: 60, words: 50 }, wordList: 'code' }, DEFAULT_SETTINGS)).toEqual({
       mode: 'time',
-      wordCount: 50,
-      timeSeconds: 15,
-      isAdaptive: false,
+      counts: { time: 60, words: 50 },
+      wordList: 'code',
+    })
+    expect(parseSavedPicks({ mode: 'words', wordCount: 10, timeSeconds: 15, wordList: 'english_1k' }, DEFAULT_SETTINGS)).toEqual({
+      mode: 'words',
+      counts: { time: 15, words: 10 },
+      wordList: 'english_1k',
+    })
+    // An odd field keeps its default; a name that cannot be a file name too.
+    expect(parseSavedPicks({ mode: 'zen', counts: { time: 'many' }, wordList: '../secrets' }, DEFAULT_SETTINGS)).toEqual({
+      mode: 'flow',
+      counts: { time: 30, words: 25 },
       wordList: 'english',
     })
-    expect(parseTypingSettings({ wordList: 'code' }).wordList).toBe('code')
-    // A name that cannot be a file name falls back: lists are named by their file.
-    expect(parseTypingSettings({ wordList: '../secrets' }).wordList).toBe('english')
-    expect(parseTypingSettings({ mode: 'zen', wordCount: 'many' })).toEqual(DEFAULT_SETTINGS)
+  })
+
+  test('the mode table: every count belongs to one mode, and the /type hint is built from it', async () => {
+    const presets = COUNTED_MODES.flatMap(mode => [...MODES[mode].count.presets])
+    expect(new Set(presets).size).toBe(presets.length)
+    expect(COUNTED_MODES.every(mode => MODES[mode].count.presets.includes(MODES[mode].count.default))).toBe(true)
+    expect(TYPE_ARGUMENT_HINT).toBe('[list] [flow | time 15–120 | words 10–100]')
   })
 })
 
@@ -238,6 +259,7 @@ const DAY_MS = 86_400_000
 const finished = (overrides: Partial<TypingRoundFinished['result']>, round: Partial<TypingRoundFinished> = {}): TypingRoundFinished => ({
   ...READY,
   mode: 'time',
+  count: 30,
   phase: 'finished',
   typed: '',
   ending: 'timeUp',
@@ -281,7 +303,7 @@ describe('progress', () => {
   test('two sessions save at once: each merges into what the other saved, so both tests stay', async () => {
     const base = recordResult(EMPTY_PROGRESS, finished({ wpm: 60 }), DAY_ONE_NOON).progress
     const thisSession = progressChanges(finished({ wpm: 70 }), DAY_ONE_NOON + 1000)
-    const otherSession = progressChanges(finished({ wpm: 80 }, { timeLimitMs: 15_000 }), DAY_ONE_NOON + 2000)
+    const otherSession = progressChanges(finished({ wpm: 80 }, { count: 15 }), DAY_ONE_NOON + 2000)
 
     // The other session saved first; this one merges into that, not into the copy it read.
     const saved = applyProgressChanges(applyProgressChanges(base, otherSession), thisSession)
@@ -325,7 +347,7 @@ describe('progress', () => {
 
   test('each configuration has its own pb', async () => {
     const timeThirty = recordResult(EMPTY_PROGRESS, finished({ wpm: 90 }), DAY_ONE_NOON)
-    const timeFifteen = recordResult(timeThirty.progress, finished({ wpm: 60 }, { timeLimitMs: 15_000 }), DAY_ONE_NOON)
+    const timeFifteen = recordResult(timeThirty.progress, finished({ wpm: 60 }, { count: 15 }), DAY_ONE_NOON)
 
     expect(timeFifteen.summary.pb).toEqual({ kind: 'first' })
   })
@@ -475,8 +497,8 @@ describe('word list names and /type', () => {
 
     expect(parse('')).toEqual({ isValid: true, settings: DEFAULT_SETTINGS })
     expect(parse('code')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, wordList: 'code' } })
-    expect(parse('10k time 60')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, mode: 'time', timeSeconds: 60, wordList: 'english_10k' } })
-    expect(parse('50')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, mode: 'words', wordCount: 50 } })
+    expect(parse('10k time 60')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, mode: 'time', counts: { time: 60, words: 25 }, wordList: 'english_10k' } })
+    expect(parse('50')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, mode: 'words', counts: { time: 30, words: 50 } } })
     expect(parse('Words')).toEqual({ isValid: true, settings: { ...DEFAULT_SETTINGS, mode: 'words' } })
     expect(parse('time 45')).toEqual({ isValid: false, error: 'unknown "45"' })
   })
@@ -734,11 +756,11 @@ describe('word lists', () => {
 
   test('a round picks only from its list, records its name, and the personal best is kept per list', async () => {
     const codeList = { name: 'code', words: ['const', 'let', '=>', 'async'] }
-    const round = createRound(1, { ...DEFAULT_SETTINGS, mode: 'words', wordCount: 10 }, [], codeList)
+    const round = createRound(1, { ...DEFAULT_SETTINGS, mode: 'words', counts: { ...DEFAULT_SETTINGS.counts, words: 10 } }, [], codeList)
 
     expect(round.wordList).toBe('code')
     expect(round.targetWords.every(word => codeList.words.includes(word))).toBe(true)
-    const result = recordResult(EMPTY_PROGRESS, finished({ wpm: 40 }, { mode: 'words', wordList: 'code', targetWords: round.targetWords }), DAY_ONE_NOON)
+    const result = recordResult(EMPTY_PROGRESS, finished({ wpm: 40 }, { mode: 'words', count: round.count, wordList: 'code', targetWords: round.targetWords }), DAY_ONE_NOON)
     expect(Object.keys(result.progress.personalBests)).toEqual(['words:10:code'])
   })
 

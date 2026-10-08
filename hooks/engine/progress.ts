@@ -1,10 +1,10 @@
 import type { TypingPbOutcome, TypingProgressSummary, TypingRound, TypingRoundFinished } from '../../types'
 
+import { MODES } from './modes'
 import { ROUND_ENDING } from './round'
-import { TYPING_MODE } from './settings'
 import { mean } from './stats'
 import { parseTyped } from './typed-text'
-import { addBigramAttempts, totalTargetWords } from './window'
+import { addBigramAttempts } from './window'
 
 /**
  * The saved progress, one `$.store` key per part. Every session on the machine shares the store and
@@ -24,7 +24,6 @@ const DAILY_LIMIT = 400
 const RECENT_COUNT = 10
 const TREND_DAYS = 7
 const DAY_MS = 86_400_000
-const MIN_FLOW_DURATION_MS = 15_000
 const MIN_ACCURACY = 75
 /** Each test the older letter-pair counts weigh this much less, so a fixed weakness fades out. */
 const BIGRAM_DECAY = 0.9
@@ -95,14 +94,12 @@ export const parseLegacyProgress = (value: unknown): StoredProgress =>
       }
     : EMPTY_PROGRESS
 
-/** A personal best is kept per configuration and word list: a 15 s sprint never competes with 100 words, nor code with English. */
-export const configKey = (round: TypingRound): string => {
-  if (round.mode === TYPING_MODE.words) {
-    return `words:${totalTargetWords(round)}:${round.wordList}`
-  }
-
-  return round.mode === TYPING_MODE.time ? `time:${round.timeLimitMs / 1000}:${round.wordList}` : `flow:${round.wordList}`
-}
+/**
+ * A personal best is kept per mode, count and word list (`time:30:english`, `flow:code`): a 15 s
+ * sprint never competes with 100 words, nor code with English.
+ */
+export const configKey = (round: TypingRound): string =>
+  [round.mode, ...(round.count === undefined ? [] : [round.count]), round.wordList].join(':')
 
 export const personalBestWpms = (progress: StoredProgress): Readonly<Record<string, number>> =>
   Object.fromEntries(Object.entries(progress.personalBests).map(([key, best]) => [key, best.wpm]))
@@ -115,8 +112,9 @@ const unfairReason = (round: TypingRoundFinished): string | undefined => {
   if (round.ending === ROUND_ENDING.early) {
     return 'ended early'
   }
-  if (round.mode === TYPING_MODE.flow && round.result.durationMs < MIN_FLOW_DURATION_MS) {
-    return `under ${MIN_FLOW_DURATION_MS / 1000} s`
+  const { minFairMs } = MODES[round.mode]
+  if (round.result.durationMs < minFairMs) {
+    return `under ${minFairMs / 1000} s`
   }
 
   return round.result.accuracy < MIN_ACCURACY ? `accuracy under ${MIN_ACCURACY}%` : undefined

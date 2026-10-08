@@ -40,6 +40,11 @@ const EMPTY_SITE = { type: 'Box', props: {} } as const
 const TURN_DONE = { reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false } as const
 
 /** /type as the person types it in the prompt. */
+/** Saved picks in the store, as a later session finds them: over the defaults (flow, time 30, words 25, english). */
+const picks = (change: { mode?: 'flow' | 'time' | 'words'; time?: number; words?: number; wordList?: string }) => ({
+  settings: { mode: change.mode ?? 'flow', counts: { time: change.time ?? 30, words: change.words ?? 25 }, wordList: change.wordList ?? 'english' },
+})
+
 /** A session start as an interactive terminal session raises it. */
 const SESSION = { cwd: '/', surface: 'terminal', isInteractive: true } as const
 
@@ -283,9 +288,10 @@ const expectPaneRows = async (pane: PaneHandle, phase: string): Promise<void> =>
 
 describe('probe: the pane never changes height', () => {
   for (const surface of ['terminal', 'desktop'] as const) {
-    test(`${surface}: ready, every word, Claude done, finished, details`, { options: { mode: 'words', wordCount: '10' } }, async ($, on) => {
+    test(`${surface}: ready, every word, Claude done, finished, details`, async ($, on) => {
       const clock = mock.clock(on)
-      stubWorld(on)
+      stubWorld(on, picks({ mode: 'words', words: 10 }))
+      await $.session.start(SESSION)
       const { pane } = await openFromBand($, clock, surface)
 
       await expectPaneRows(pane, 'ready')
@@ -305,9 +311,10 @@ describe('probe: the pane never changes height', () => {
   }
 
   for (const bodyColumns of [24, 40, 200]) {
-    test(`width ${bodyColumns}: the same height, also at the end of a words test`, { options: { mode: 'words', wordCount: '10' } }, async ($, on) => {
+    test(`width ${bodyColumns}: the same height, also at the end of a words test`, async ($, on) => {
       const clock = mock.clock(on)
-      stubWorld(on)
+      stubWorld(on, picks({ mode: 'words', words: 10 }))
+      await $.session.start(SESSION)
       const { pane } = await openFromBand($, clock)
       await pane.redraw({ ...PANE_PROPS, bodyColumns })
 
@@ -338,9 +345,10 @@ describe('probe: the pane never changes height', () => {
     expect(await elementsBeforeField()).not.toContain('Button')
   })
 
-  test('a finished test is saved once, however often the finished round changes after', { options: { mode: 'words', wordCount: '10' } }, async ($, on) => {
+  test('a finished test is saved once, however often the finished round changes after', async ($, on) => {
     const clock = mock.clock(on)
-    const world = stubWorld(on)
+    const world = stubWorld(on, picks({ mode: 'words', words: 10 }))
+    await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)
     for (let index = 0; index < 10; index++) {
       await typeNextWord(pane)
@@ -425,13 +433,13 @@ describe('probe: picker', () => {
     expect(await fieldKey(pane)).toBe('r4-f0')
 
     // Saved as one value in the store, the last pick over the others; /config is never written.
-    expect(world.saved.get('settings')).toEqual({ mode: 'flow', wordCount: 50, timeSeconds: 30, wordList: 'english' })
+    expect(world.saved.get('settings')).toEqual({ mode: 'flow', counts: { time: 30, words: 50 }, wordList: 'english' })
     expect(world.configWrites).toEqual([])
   })
 
-  test('saved picks are in use at the next start, over the /config defaults', { options: { mode: 'time' } }, async ($, on) => {
+  test('saved picks are in use at the next start', async ($, on) => {
     const clock = mock.clock(on)
-    stubWorld(on, { settings: { mode: 'words', wordCount: 50, timeSeconds: 30, wordList: 'english' } })
+    stubWorld(on, picks({ mode: 'words', words: 50 }))
     await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)
 
@@ -439,21 +447,10 @@ describe('probe: picker', () => {
     expect((await pane.find({ type: 'Button', key: 'pick-words' }))?.props['dimColor']).toBe(false)
   })
 
-  test('a turntype default changed in /config clears the saved picks, so it is the one in use', async ($, on) => {
-    const world = stubWorld(on, { settings: { mode: 'words', wordCount: 50, timeSeconds: 30, wordList: 'english' } })
-    await $.session.start(SESSION)
-
-    await $.config.set({ key: 'turntype.mode', value: 'time', previous: 'flow', origin: { kind: 'composer' }, provider: { plugin: 'engine', tier: 'core' } })
-    expect(world.saved.has('settings')).toBe(false)
-    // The theme is no turntype default: the picks stay.
-    world.saved.set('settings', { mode: 'words', wordCount: 50, timeSeconds: 30, wordList: 'english' })
-    await $.config.set({ key: 'theme', value: 'light', previous: 'dark', origin: { kind: 'composer' }, provider: { plugin: 'engine', tier: 'core' } })
-    expect(world.saved.has('settings')).toBe(true)
-  })
-
-  test('the result card marks what "again" starts: settings changed during the test, not the test played', { options: { mode: 'words', wordCount: '10' } }, async ($, on) => {
+  test('the result card marks what "again" starts: settings changed during the test, not the test played', async ($, on) => {
     const clock = mock.clock(on)
-    stubWorld(on)
+    stubWorld(on, picks({ mode: 'words', words: 10 }))
+    await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)
     await typeNextWord(pane)
 
@@ -500,9 +497,10 @@ describe('probe: picker', () => {
     expect(world.saved.has('settings')).toBe(false)
   })
 
-  test('in an open group the count in use is yellow text, the others dim buttons', { options: { mode: 'time' } }, async ($, on) => {
+  test('in an open group the count in use is yellow text, the others dim buttons', async ($, on) => {
     const clock = mock.clock(on)
-    stubWorld(on)
+    stubWorld(on, picks({ mode: 'time' }))
+    await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)
 
     await pane.press({ key: 'pick-time' })
@@ -821,9 +819,10 @@ describe('probe: symbols', () => {
     ...(await handle.findAll({ type: 'Button' })).map(found => String(found.props['label'] ?? '')),
   ]
 
-  test('band and pane draw no emoji-capable symbol, in every phase', { options: { mode: 'words', wordCount: '10' } }, async ($, on) => {
+  test('band and pane draw no emoji-capable symbol, in every phase', async ($, on) => {
     const clock = mock.clock(on)
-    stubWorld(on)
+    stubWorld(on, picks({ mode: 'words', words: 10 }))
+    await $.session.start(SESSION)
     const { band, pane } = await openFromBand($, clock)
     const seen: string[] = [...(await drawnTexts(band)), ...(await drawnTexts(pane))]
 
@@ -902,9 +901,10 @@ describe('probe: spaces before a word', () => {
 })
 
 describe('probe: paste guard', () => {
-  test('text pasted into the field ends in a result that is no personal best try', { options: { mode: 'words', wordCount: '10' } }, async ($, on) => {
+  test('text pasted into the field ends in a result that is no personal best try', async ($, on) => {
     const clock = mock.clock(on)
-    stubWorld(on)
+    stubWorld(on, picks({ mode: 'words', words: 10 }))
+    await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)
 
     // A fixed text, longer than any burst: the guard reads the size of one change, not what it says.
@@ -919,9 +919,9 @@ describe('probe: paste guard', () => {
 describe('probe: word lists', () => {
   const listFile = (prefix: string, count = 30) => JSON.stringify({ words: Array.from({ length: count }, (_, index) => `${prefix}${index}`) })
 
-  test('the lists in word-lists/ load, and the chosen one gives the words', { options: { wordList: 'code' } }, async ($, on) => {
+  test('the lists in word-lists/ load, and the chosen one gives the words', async ($, on) => {
     const clock = mock.clock(on)
-    const world = stubWorld(on)
+    const world = stubWorld(on, picks({ wordList: 'code' }))
     world.wordListFiles = { 'english.json': listFile('eng'), 'code.json': listFile('code') }
 
     await $.session.start(SESSION)
@@ -929,9 +929,9 @@ describe('probe: word lists', () => {
     expect(await currentWord(pane)).toMatch(/^code\d+$/)
   })
 
-  test('a broken file and a list with too few words are left out; an unknown name gets english', { options: { wordList: 'broken' } }, async ($, on) => {
+  test('a broken file and a list with too few words are left out; an unknown name gets english', async ($, on) => {
     const clock = mock.clock(on)
-    const world = stubWorld(on)
+    const world = stubWorld(on, picks({ wordList: 'broken' }))
     world.wordListFiles = { 'english.json': listFile('eng'), 'broken.json': '{ "words": [', 'short.json': listFile('short', 5), 'notes.txt': 'not a list' }
 
     await $.session.start(SESSION)
@@ -950,9 +950,9 @@ describe('probe: word lists', () => {
     expect(FALLBACK_WORD_LIST.words).toContain(await currentWord(pane))
   })
 
-  test('a flow test adds words from the chosen list, and no key reads a file', { options: { wordList: 'code' } }, async ($, on) => {
+  test('a flow test adds words from the chosen list, and no key reads a file', async ($, on) => {
     const clock = mock.clock(on)
-    const world = stubWorld(on)
+    const world = stubWorld(on, picks({ wordList: 'code' }))
     world.wordListFiles = { 'english.json': listFile('eng'), 'code.json': listFile('code') }
 
     await $.session.start(SESSION)
@@ -1006,9 +1006,9 @@ describe('probe: toolbar and word list', () => {
     expect(await listRow(pane)).toEqual(['english 10k'])
   })
 
-  test('while a test runs the list cannot switch; on the result card it can', { options: { mode: 'words', wordCount: '10' } }, async ($, on) => {
+  test('while a test runs the list cannot switch; on the result card it can', async ($, on) => {
     const clock = mock.clock(on)
-    const world = stubWorld(on)
+    const world = stubWorld(on, picks({ mode: 'words', words: 10 }))
     world.wordListFiles = LISTS()
     await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)
@@ -1061,7 +1061,7 @@ describe('probe: toolbar and word list', () => {
     expect(await listRow(pane)).toEqual(['english 10k'])
     expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { label: '◷ time (60)' } })
     expect((await pane.find({ type: 'Button', key: 'pick-time' }))?.props['dimColor']).toBe(false)
-    expect(world.saved.get('settings')).toEqual({ mode: 'time', wordCount: 25, timeSeconds: 60, wordList: 'english_10k' })
+    expect(world.saved.get('settings')).toEqual({ mode: 'time', counts: { time: 60, words: 25 }, wordList: 'english_10k' })
     expect(world.configWrites).toEqual([])
     void clock
   })
@@ -1075,9 +1075,10 @@ describe('probe: toolbar and word list', () => {
     expect(world.configWrites).toEqual([])
   })
 
-  test('the toolbar closed: the list, the modes with icons and counts, the mode in use bright, the rest dim', { options: { mode: 'time' } }, async ($, on) => {
+  test('the toolbar closed: the list, the modes with icons and counts, the mode in use bright, the rest dim', async ($, on) => {
     const clock = mock.clock(on)
-    stubWorld(on)
+    stubWorld(on, picks({ mode: 'time' }))
+    await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)
 
     const buttons = (await pane.findAll({ type: 'Button' })).filter(found => found.key?.startsWith('pick-'))
@@ -1116,9 +1117,9 @@ describe('probe: theme colors', () => {
     return (await pane.findAll({ type: 'Text' })).find(found => found.text === '30')?.props['color']
   }
 
-  test('in the dark theme the yellow is #FFCE1B; other themes keep the theme key', { options: { mode: 'time' } }, async ($, on) => {
+  test('in the dark theme the yellow is #FFCE1B; other themes keep the theme key', async ($, on) => {
     const clock = mock.clock(on)
-    const world = stubWorld(on)
+    const world = stubWorld(on, picks({ mode: 'time' }))
     world.theme = 'dark'
     await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)
@@ -1131,9 +1132,9 @@ describe('probe: theme colors', () => {
     expect(await selectedColor(pane)).toBe('warning')
   })
 
-  test('the colorblind dark theme and a host without /config keep the theme key', { options: { mode: 'time' } }, async ($, on) => {
+  test('the colorblind dark theme and a host without /config keep the theme key', async ($, on) => {
     const clock = mock.clock(on)
-    const world = stubWorld(on)
+    const world = stubWorld(on, picks({ mode: 'time' }))
     world.theme = 'dark-daltonized'
     await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)

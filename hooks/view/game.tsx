@@ -3,9 +3,9 @@ import type { Color, TextProps } from 'claude-code'
 import type { TypingRoundRunning } from '../../types'
 import { buildVisibleLines, LETTER_STYLE } from '../engine/layout'
 import type { LetterStyle } from '../engine/layout'
-import { TYPING_MODE } from '../engine/settings'
+import { MODES } from '../engine/modes'
 import { liveWpm } from '../engine/stats'
-import { activeElapsedMs, isIdle } from '../engine/timing'
+import { activeElapsedMs, isIdle, timeLimitMs } from '../engine/timing'
 import { foldOf } from '../engine/window'
 import type { Palette } from './palette'
 import { settingsPicker } from './picker'
@@ -88,7 +88,7 @@ const pace = (elements: Pick<GameElements, 'Box' | 'Text'>, round: TypingRoundRu
   const activeMs = activeElapsedMs(round, now)
   const wpm = liveWpm(round, activeMs)
   const clock =
-    round.mode === TYPING_MODE.time ? `${formatClock(Math.max(0, round.timeLimitMs - activeMs))} left` : formatClock(activeMs)
+    MODES[round.mode].endsWhen === 'timeUp' ? `${formatClock(Math.max(0, timeLimitMs(round) - activeMs))} left` : formatClock(activeMs)
 
   return [stat(elements, clock, { dimColor: true }), stat(elements, `${wpm} wpm`, { color: pbColor(activeMs, wpm, round.pbWpm, palette), bold: true })]
 }

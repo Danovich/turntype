@@ -1,4 +1,6 @@
-import type { TypingRoundRunning } from '../../types'
+import type { TypingRoundBase, TypingRoundRunning } from '../../types'
+
+import { MODES } from './modes'
 
 /**
  * One rule pauses every interruption (Esc, a closed pane, a permission prompt, a break):
@@ -15,5 +17,8 @@ export const isIdle = (round: TypingRoundRunning, now: number): boolean => now -
 export const activeElapsedMs = (round: TypingRoundRunning, now: number): number =>
   Math.min(now, round.lastInputAt + IDLE_PAUSE_MS) - round.startedAt - round.pausedMs
 
-export const isTimeUp = (round: TypingRoundRunning, now: number): boolean =>
-  round.mode === 'time' && activeElapsedMs(round, now) >= round.timeLimitMs
+/** The active time a test lasts: its count in seconds where the mode ends when time is up; else no limit. */
+export const timeLimitMs = (round: TypingRoundBase): number =>
+  MODES[round.mode].endsWhen === 'timeUp' ? (round.count ?? 0) * 1000 : Number.POSITIVE_INFINITY
+
+export const isTimeUp = (round: TypingRoundRunning, now: number): boolean => activeElapsedMs(round, now) >= timeLimitMs(round)

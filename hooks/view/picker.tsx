@@ -1,5 +1,5 @@
-import type { TypingSettings } from '../../types'
-import { TIME_PRESETS, TYPING_MODE, WORD_PRESETS } from '../engine/settings'
+import type { TypingCountedMode, TypingMode, TypingSettings } from '../../types'
+import { isCountedMode, MODES, TYPING_MODES } from '../engine/modes'
 import { wordListLabel, wordListOrder } from '../engine/word-list'
 import type { Palette } from './palette'
 import type { GameElements } from './shared'
@@ -7,11 +7,11 @@ import type { GameElements } from './shared'
 type PickerElements = Pick<GameElements, 'Box' | 'Button' | 'Text'>
 
 /** One cell each, never emoji: ∿ a flow with no end, ◷ a clock, ☰ lines of words, ◍ a list. */
-const MODE_ICON = { flow: '∿', time: '◷', words: '☰' } as const
+const MODE_ICON: Readonly<Record<TypingMode, string>> = { flow: '∿', time: '◷', words: '☰' }
 const LIST_ICON = '◍'
 
 /** The toolbar group showing its options: the word lists, or one mode's counts; none when closed. */
-export type OpenOptions = 'list' | 'time' | 'words' | null
+export type OpenOptions = 'list' | TypingCountedMode | null
 
 export type PickerProps = {
   /** The settings in use: what the toolbar marks, what a pick starts from, each mode's last count. */
@@ -67,21 +67,18 @@ const optionGroup = (
 }
 
 /**
- * ◍ english 1k ❘ ∿ flow  ◷ time (30)  ☰ words (10) — the word list and the modes with their counts,
- * all read from the settings in use: the next test is made from them. Each group shows its options
- * on a press and closes on a pick: `◍ english 1k  english  5k  10k  code`, `◷ time  15  30  60  120`.
- * Flow has none: a press picks it. No hotkeys: keys type, so Tab reaches the buttons. Every item
- * keeps its width: a word never breaks across rows. Only drawn where a test has not started: before
- * the first key, or on the result card.
+ * ◍ english 1k ❘ ∿ flow  ◷ time (30)  ☰ words (10) — the word list, then each mode of `modes.ts` in
+ * order, all read from the settings in use: the next test is made from them. A group shows its
+ * options on a press and closes on a pick: `◍ english 1k  english  5k  10k  code`, `◷ time  15  30
+ * 60  120`. A mode without a count (flow) is one button: a press picks it. No hotkeys: keys type, so
+ * Tab reaches the buttons. Every item keeps its width: a word never breaks across rows. Only drawn
+ * where a test has not started: before the first key, or on the result card.
  */
 export const settingsPicker = (elements: PickerElements, props: PickerProps, actions: PickerActions) => {
   const { Box, Button, Text } = elements
   const { settings, palette, openOptions, wordListNames } = props
   const choose = (change: Partial<TypingSettings>) => () => actions.onChoose({ ...settings, ...change })
-  const isFlow = settings.mode === TYPING_MODE.flow
-  const isTime = settings.mode === TYPING_MODE.time
-  const isWords = settings.mode === TYPING_MODE.words
-  // Flow in use has nothing to pick: its press closes an open group instead.
+  // A mode in use with nothing to pick: its press closes an open group instead.
   const closeOpen = () => {
     if (openOptions !== null) {
       actions.onToggle(openOptions)
@@ -91,12 +88,28 @@ export const settingsPicker = (elements: PickerElements, props: PickerProps, act
   const listOptions = wordListOrder(wordListNames)
     .filter(name => name !== settings.wordList)
     .map(name => pickOption(elements, palette, `pick-list-${name}`, wordListLabel(name, wordListNames), false, choose({ wordList: name })))
-  const timeOptions = TIME_PRESETS.map(seconds =>
-    pickOption(elements, palette, `pick-time-${seconds}`, String(seconds), isTime && settings.timeSeconds === seconds, choose({ mode: TYPING_MODE.time, timeSeconds: seconds })),
-  )
-  const wordsOptions = WORD_PRESETS.map(count =>
-    pickOption(elements, palette, `pick-words-${count}`, String(count), isWords && settings.wordCount === count, choose({ mode: TYPING_MODE.words, wordCount: count })),
-  )
+
+  const modeItem = (mode: TypingMode) => {
+    const label = `${MODE_ICON[mode]} ${mode}`
+    const isInUse = settings.mode === mode
+
+    if (!isCountedMode(mode)) {
+      return <Button key={`pick-${mode}`} label={label} plain dimColor={!isInUse} onPress={isInUse ? closeOpen : choose({ mode })} />
+    }
+    const isOpen = openOptions === mode
+    const options = MODES[mode].count.presets.map(count =>
+      pickOption(
+        elements,
+        palette,
+        `pick-${mode}-${count}`,
+        String(count),
+        isInUse && settings.counts[mode] === count,
+        choose({ mode, counts: { ...settings.counts, [mode]: count } }),
+      ),
+    )
+
+    return optionGroup(elements, `pick-${mode}`, isOpen ? label : `${label} (${settings.counts[mode]})`, isInUse, isOpen, () => actions.onToggle(mode), options)
+  }
 
   return (
     <Box flexDirection="row" columnGap={2}>
@@ -105,25 +118,7 @@ export const settingsPicker = (elements: PickerElements, props: PickerProps, act
         {optionGroup(elements, 'pick-list', fullListLabel(settings.wordList), true, openOptions === 'list', () => actions.onToggle('list'), listOptions)}
       </Box>
       <Text dimColor>❘</Text>
-      <Button key="pick-flow" label={`${MODE_ICON.flow} flow`} plain dimColor={!isFlow} onPress={isFlow ? closeOpen : choose({ mode: TYPING_MODE.flow })} />
-      {optionGroup(
-        elements,
-        'pick-time',
-        openOptions === 'time' ? `${MODE_ICON.time} time` : `${MODE_ICON.time} time (${settings.timeSeconds})`,
-        isTime,
-        openOptions === 'time',
-        () => actions.onToggle('time'),
-        timeOptions,
-      )}
-      {optionGroup(
-        elements,
-        'pick-words',
-        openOptions === 'words' ? `${MODE_ICON.words} words` : `${MODE_ICON.words} words (${settings.wordCount})`,
-        isWords,
-        openOptions === 'words',
-        () => actions.onToggle('words'),
-        wordsOptions,
-      )}
+      {TYPING_MODES.map(modeItem)}
     </Box>
   )
 }

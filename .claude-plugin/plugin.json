@@ -8,41 +8,6 @@
   "license": "GPL-3.0-or-later",
   "types": "./types/index.d.ts",
   "userConfig": {
-    "mode": {
-      "type": "string",
-      "title": "Mode",
-      "description": "flow: endless words for the length of the turn. words: a fixed number of words. time: a fixed active time.",
-      "options": [
-        "flow",
-        "words",
-        "time"
-      ],
-      "default": "flow"
-    },
-    "wordCount": {
-      "type": "string",
-      "title": "Words",
-      "description": "The number of words in words mode.",
-      "options": [
-        "10",
-        "25",
-        "50",
-        "100"
-      ],
-      "default": "25"
-    },
-    "timeSeconds": {
-      "type": "string",
-      "title": "Seconds",
-      "description": "The active time in time mode. Pauses do not count.",
-      "options": [
-        "15",
-        "30",
-        "60",
-        "120"
-      ],
-      "default": "30"
-    },
     "adaptive": {
       "type": "string",
       "title": "Adaptive words",
@@ -52,12 +17,6 @@
         "off"
       ],
       "default": "on"
-    },
-    "wordList": {
-      "type": "string",
-      "title": "Word list",
-      "description": "The words to type: the name of a file in the mod's word-lists/ folder, without .json (english, code). An unknown name uses english.",
-      "default": "english"
     }
   }
 }

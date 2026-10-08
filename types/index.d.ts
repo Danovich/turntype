@@ -1,18 +1,22 @@
-export type TypingMode = 'flow' | 'words' | 'time'
+/** The game's modes; `hooks/engine/modes.ts` holds each one's rules, and the compiler holds it to this list. */
+export type TypingMode = 'flow' | 'time' | 'words'
 
-/** What a round is played with: the /config defaults (userConfig) under the picks made in the game. */
+/** The modes with a count to pick: seconds for time, words for words. */
+export type TypingCountedMode = 'time' | 'words'
+
+/** What a round is played with: the picks made in the game over the defaults of `modes.ts`, and adaptive from /config. */
 export type TypingSettings = {
   readonly mode: TypingMode
-  readonly wordCount: number
-  readonly timeSeconds: number
+  /** Each counted mode's count, kept while another mode is in use. */
+  readonly counts: Readonly<Record<TypingCountedMode, number>>
   /** Mix in words with the player's weak letter pairs. */
   readonly isAdaptive: boolean
   /** The name of the word list to pick from: a file in `word-lists/`, without `.json`. */
   readonly wordList: string
 }
 
-/** The settings a pick in the game changes; the rest (adaptive) is /config's alone. */
-export type TypingPicks = Pick<TypingSettings, 'mode' | 'wordCount' | 'timeSeconds' | 'wordList'>
+/** The settings a pick in the game changes, saved in the store; the rest (adaptive) is /config's alone. */
+export type TypingPicks = Pick<TypingSettings, 'mode' | 'counts' | 'wordList'>
 
 export type TypingCharCounts = {
   readonly correct: number
@@ -59,8 +63,8 @@ export type TypingFold = {
 export type TypingRoundBase = {
   readonly roundId: number
   readonly mode: TypingMode
-  /** The active time a `time` round lasts; unused by the other modes. */
-  readonly timeLimitMs: number
+  /** The mode's count when the round was made (seconds for time, words for words); undefined for flow. */
+  readonly count: number | undefined
   readonly targetWords: readonly string[]
   readonly isClaudeDone: boolean
   /** Counts the input fields of this round; a new field (new key) starts empty after each word. */
@@ -162,7 +166,7 @@ declare module 'claude-code' {
       /** The result card shows its second line of stats (raw, consistency, characters). */
       isDetailsShown: boolean
       /** The toolbar group showing its options (the word lists, or a mode's counts); null: all closed. */
-      openOptions: 'list' | 'time' | 'words' | null
+      openOptions: 'list' | TypingCountedMode | null
       /** Personal best wpm per configuration key, loaded from the store: the live vs-PB mark reads it. */
       personalBests: Readonly<Record<string, number>>
       /** The player's weakest letter pairs from the store: new rounds practice them. */

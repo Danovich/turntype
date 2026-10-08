@@ -1,3 +1,5 @@
+import { DEFAULT_WORD_LIST } from './modes'
+
 /**
  * A word list: what a test picks its words from. The lists are JSON files in the mod's
  * `word-lists/` folder, `{ "words": [...] }`, named by their file: to add a list, add a file.
@@ -7,14 +9,13 @@ export type WordList = {
   readonly words: readonly string[]
 }
 
-export const DEFAULT_WORD_LIST_NAME = 'english'
 
 /**
  * The first 50 words of `english.json`, our own list: the game still works when no list file can be
  * read. (The `english_1k`/`_5k`/`_10k` files are Monkeytype's, GPL-3.0: see the README.)
  */
 export const FALLBACK_WORD_LIST: WordList = {
-  name: DEFAULT_WORD_LIST_NAME,
+  name: DEFAULT_WORD_LIST,
   words: [
     'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'it',
     'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this',
@@ -55,7 +56,7 @@ export const wordListOrder = (names: readonly string[]): readonly string[] => {
     const variant = variantOf(name, names)
     const base = variant?.base ?? name
 
-    return { isDefault: base === DEFAULT_WORD_LIST_NAME ? 0 : 1, base, size: variant === undefined ? 0 : Number.parseFloat(variant.suffix) || Infinity }
+    return { isDefault: base === DEFAULT_WORD_LIST ? 0 : 1, base, size: variant === undefined ? 0 : Number.parseFloat(variant.suffix) || Infinity }
   }
 
   return names.toSorted((first, second) => {
