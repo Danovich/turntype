@@ -1,0 +1,282 @@
+import type { TypingPbOutcome, TypingProgressSummary, TypingRound, TypingRoundFinished } from '../../types'
+
+import { ROUND_ENDING } from './round'
+import { TYPING_MODE } from './settings'
+import { mean } from './stats'
+import { parseTyped } from './typed-text'
+import { addBigramAttempts, totalTargetWords } from './window'
+
+/**
+ * The saved progress, one `$.store` key per part. Every session on the machine shares the store and
+ * a get then a set is not atomic, so a save reads each part again right before it writes it and
+ * merges this test into it: a test another session saved meanwhile is kept.
+ */
+export const PROGRESS_PARTS = ['personalBests', 'history', 'daily', 'bigrams'] as const
+
+export type ProgressPart = (typeof PROGRESS_PARTS)[number]
+
+/** The one record of versions before 0.8: read once, split into the parts, then deleted. */
+export const LEGACY_PROGRESS_KEY = 'progress'
+
+const LEGACY_VERSION = 1
+const HISTORY_LIMIT = 200
+const DAILY_LIMIT = 400
+const RECENT_COUNT = 10
+const TREND_DAYS = 7
+const DAY_MS = 86_400_000
+const MIN_FLOW_DURATION_MS = 15_000
+const MIN_ACCURACY = 75
+/** Each test the older letter-pair counts weigh this much less, so a fixed weakness fades out. */
+const BIGRAM_DECAY = 0.9
+const MIN_BIGRAM_ATTEMPTS = 15
+const MIN_BIGRAM_ERROR_RATE = 0.04
+const FOCUS_BIGRAM_COUNT = 3
+const SPARK_LEVELS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'] as const
+
+type PersonalBest = { readonly wpm: number; readonly accuracy: number; readonly at: number }
+type HistoryEntry = { readonly key: string; readonly at: number; readonly wpm: number; readonly accuracy: number }
+type DailyTotal = { readonly tests: number; readonly activeMs: number }
+type BigramStat = { readonly attempts: number; readonly errors: number }
+
+export type StoredProgress = {
+  readonly personalBests: Readonly<Record<string, PersonalBest>>
+  /** Fair results only, oldest first. */
+  readonly history: readonly HistoryEntry[]
+  /** Per local day, `YYYY-MM-DD`: every test with at least one word. */
+  readonly daily: Readonly<Record<string, DailyTotal>>
+  /** Per letter pair: how often it was typed and missed, older tests weighing less. */
+  readonly bigrams: Readonly<Record<string, BigramStat>>
+}
+
+export const EMPTY_PROGRESS: StoredProgress = { personalBests: {}, history: [], daily: {}, bigrams: {} }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+
+const isPersonalBest = (value: unknown): value is PersonalBest =>
+  isRecord(value) && isFiniteNumber(value['wpm']) && isFiniteNumber(value['accuracy']) && isFiniteNumber(value['at'])
+
+const isHistoryEntry = (value: unknown): value is HistoryEntry =>
+  isRecord(value) &&
+  typeof value['key'] === 'string' &&
+  isFiniteNumber(value['at']) &&
+  isFiniteNumber(value['wpm']) &&
+  isFiniteNumber(value['accuracy'])
+
+const isDailyTotal = (value: unknown): value is DailyTotal =>
+  isRecord(value) && isFiniteNumber(value['tests']) && isFiniteNumber(value['activeMs'])
+
+const isBigramStat = (value: unknown): value is BigramStat =>
+  isRecord(value) && isFiniteNumber(value['attempts']) && isFiniteNumber(value['errors'])
+
+const pickValidEntries = <T>(value: unknown, isValid: (entry: unknown) => entry is T): Record<string, T> =>
+  isRecord(value)
+    ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, T] => isValid(entry[1])))
+    : {}
+
+/** Reads each saved part; a missing or broken part starts empty, one odd entry is left out. */
+export const PART_PARSERS: { readonly [P in ProgressPart]: (value: unknown) => StoredProgress[P] } = {
+  personalBests: value => pickValidEntries(value, isPersonalBest),
+  history: value => (Array.isArray(value) ? value.filter(isHistoryEntry) : []),
+  daily: value => pickValidEntries(value, isDailyTotal),
+  bigrams: value => pickValidEntries(value, isBigramStat),
+}
+
+/** The record of versions before 0.8, split into its parts; another version or a broken value is empty. */
+export const parseLegacyProgress = (value: unknown): StoredProgress =>
+  isRecord(value) && value['version'] === LEGACY_VERSION
+    ? {
+        personalBests: PART_PARSERS.personalBests(value['personalBests']),
+        history: PART_PARSERS.history(value['history']),
+        daily: PART_PARSERS.daily(value['daily']),
+        bigrams: PART_PARSERS.bigrams(value['bigrams']),
+      }
+    : EMPTY_PROGRESS
+
+/** A personal best is kept per configuration and word list: a 15 s sprint never competes with 100 words, nor code with English. */
+export const configKey = (round: TypingRound): string => {
+  if (round.mode === TYPING_MODE.words) {
+    return `words:${totalTargetWords(round)}:${round.wordList}`
+  }
+
+  return round.mode === TYPING_MODE.time ? `time:${round.timeLimitMs / 1000}:${round.wordList}` : `flow:${round.wordList}`
+}
+
+export const personalBestWpms = (progress: StoredProgress): Readonly<Record<string, number>> =>
+  Object.fromEntries(Object.entries(progress.personalBests).map(([key, best]) => [key, best.wpm]))
+
+/** Why a result cannot set a personal best, or undefined when it is a fair test. */
+const unfairReason = (round: TypingRoundFinished): string | undefined => {
+  if (round.hasPastedText) {
+    return 'text was pasted'
+  }
+  if (round.ending === ROUND_ENDING.early) {
+    return 'ended early'
+  }
+  if (round.mode === TYPING_MODE.flow && round.result.durationMs < MIN_FLOW_DURATION_MS) {
+    return `under ${MIN_FLOW_DURATION_MS / 1000} s`
+  }
+
+  return round.result.accuracy < MIN_ACCURACY ? `accuracy under ${MIN_ACCURACY}%` : undefined
+}
+
+/** The local calendar day: a streak follows the player's midnight, not UTC. */
+const dayKey = (date: Date): string =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+
+const previousDay = (date: Date): Date => new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1)
+
+const countStreak = (daily: StoredProgress['daily'], day: Date): number =>
+  daily[dayKey(day)] === undefined ? 0 : 1 + countStreak(daily, previousDay(day))
+
+const addToDaily = (daily: StoredProgress['daily'], today: string, durationMs: number): StoredProgress['daily'] => {
+  const before = daily[today] ?? { tests: 0, activeMs: 0 }
+  const entries = Object.entries({ ...daily, [today]: { tests: before.tests + 1, activeMs: before.activeMs + durationMs } })
+
+  return Object.fromEntries(
+    entries.toSorted(([firstDay], [secondDay]) => firstDay.localeCompare(secondDay)).slice(-DAILY_LIMIT),
+  )
+}
+
+const roundToHundredths = (value: number): number => Math.round(value * 100) / 100
+
+/** The target text the player reached in the window: committed words whole, the current one as far as typed. */
+const reachedText = (round: TypingRoundFinished): readonly string[] => {
+  const { committedWords, currentWord } = parseTyped(round.typed)
+
+  return [
+    ...committedWords.map((_, index) => round.targetWords[index] ?? ''),
+    (round.targetWords[committedWords.length] ?? '').slice(0, currentWord.length),
+  ]
+}
+
+/** Weighs the old counts down and adds this test's; a pair that fades below one attempt is dropped. */
+const mergeBigrams = (bigrams: StoredProgress['bigrams'], round: TypingRoundFinished): StoredProgress['bigrams'] => {
+  // Every pair reached is one attempt: the window's, and the folded words' counted when folded.
+  const attempts = addBigramAttempts(round.fold.bigramAttempts, reachedText(round))
+  const keys = new Set([...Object.keys(bigrams), ...Object.keys(attempts), ...Object.keys(round.bigramErrors)])
+
+  return Object.fromEntries(
+    [...keys]
+      .map((bigram): [string, BigramStat] => [
+        bigram,
+        {
+          attempts: roundToHundredths((bigrams[bigram]?.attempts ?? 0) * BIGRAM_DECAY + (attempts[bigram] ?? 0)),
+          errors: roundToHundredths((bigrams[bigram]?.errors ?? 0) * BIGRAM_DECAY + (round.bigramErrors[bigram] ?? 0)),
+        },
+      ])
+      .filter(([, stat]) => stat.attempts >= 1),
+  )
+}
+
+/**
+ * The player's weakest letter pairs, worst first: enough attempts to judge, and an error rate
+ * that is not noise. Smoothing (+5 attempts) keeps one slip on a rare pair from topping the list.
+ */
+export const weakBigrams = (progress: StoredProgress): readonly string[] =>
+  Object.entries(progress.bigrams)
+    .filter(([, stat]) => stat.attempts >= MIN_BIGRAM_ATTEMPTS)
+    .map(([bigram, stat]) => ({ bigram, errorRate: stat.errors / (stat.attempts + 5) }))
+    .filter(({ errorRate }) => errorRate >= MIN_BIGRAM_ERROR_RATE)
+    .toSorted((first, second) => second.errorRate - first.errorRate)
+    .slice(0, FOCUS_BIGRAM_COUNT)
+    .map(({ bigram }) => bigram)
+
+const judgePersonalBest = (wpm: number, previous: PersonalBest | undefined): TypingPbOutcome => {
+  if (previous === undefined) {
+    return { kind: 'first' }
+  }
+
+  return wpm > previous.wpm ? { kind: 'new', previousWpm: previous.wpm } : { kind: 'kept', pbWpm: previous.wpm }
+}
+
+/** How one finished test changes each part: applied to the parts as read, or to a fresher copy. */
+export type ProgressChanges = { readonly [P in ProgressPart]: (part: StoredProgress[P]) => StoredProgress[P] }
+
+/**
+ * The changes of a finished test that ended at `now`. Each one merges, never replaces: a personal
+ * best keeps the higher wpm, a result is added once, today's total adds this test. So applied to a
+ * part another session changed meanwhile, both tests stay.
+ */
+export const progressChanges = (round: TypingRoundFinished, now: number): ProgressChanges => {
+  const { result } = round
+  const key = configKey(round)
+  const isFair = unfairReason(round) === undefined
+  // Any test with a word is practice data and counts for today, fair or not.
+  const hasWords = result.wordCount > 0
+  const entry: HistoryEntry = { key, at: now, wpm: result.wpm, accuracy: result.accuracy }
+
+  return {
+    personalBests: bests =>
+      isFair && (bests[key]?.wpm ?? -1) < result.wpm ? { ...bests, [key]: { wpm: result.wpm, accuracy: result.accuracy, at: now } } : bests,
+    history: history =>
+      isFair && !history.some(past => past.key === key && past.at === now) ? [...history, entry].slice(-HISTORY_LIMIT) : history,
+    daily: daily => (hasWords ? addToDaily(daily, dayKey(new Date(now)), result.durationMs) : daily),
+    bigrams: bigrams => (hasWords ? mergeBigrams(bigrams, round) : bigrams),
+  }
+}
+
+export const applyProgressChanges = (progress: StoredProgress, changes: ProgressChanges): StoredProgress => ({
+  personalBests: changes.personalBests(progress.personalBests),
+  history: changes.history(progress.history),
+  daily: changes.daily(progress.daily),
+  bigrams: changes.bigrams(progress.bigrams),
+})
+
+export type RecordedProgress = {
+  readonly progress: StoredProgress
+  readonly summary: TypingProgressSummary
+}
+
+/** Adds a finished test to the saved progress and tells how it compares. `now` is when it ended. */
+export const recordResult = (progress: StoredProgress, round: TypingRoundFinished, now: number): RecordedProgress => {
+  const { result } = round
+  const key = configKey(round)
+  const recorded = applyProgressChanges(progress, progressChanges(round, now))
+  const today = new Date(now)
+  const todayTotal = recorded.daily[dayKey(today)] ?? { tests: 0, activeMs: 0 }
+  const previousBest = progress.personalBests[key]
+  const sameConfigHistory = progress.history.filter(entry => entry.key === key)
+  const dayTotals = {
+    todayTests: todayTotal.tests,
+    todayActiveMs: todayTotal.activeMs,
+    streakDays: countStreak(recorded.daily, today),
+  }
+  const reason = unfairReason(round)
+
+  if (reason !== undefined) {
+    return {
+      progress: recorded,
+      summary: {
+        pb: { kind: 'unfair', reason, pbWpm: previousBest?.wpm },
+        trendDelta: undefined,
+        recentWpm: sameConfigHistory.slice(-RECENT_COUNT).map(entry => entry.wpm),
+        ...dayTotals,
+      },
+    }
+  }
+
+  const weekWpm = sameConfigHistory.filter(past => past.at >= now - TREND_DAYS * DAY_MS).map(past => past.wpm)
+
+  return {
+    progress: recorded,
+    summary: {
+      pb: judgePersonalBest(result.wpm, previousBest),
+      trendDelta: weekWpm.length === 0 ? undefined : Math.round(result.wpm - mean(weekWpm)),
+      recentWpm: [...sameConfigHistory, { wpm: result.wpm }].slice(-RECENT_COUNT).map(past => past.wpm),
+      ...dayTotals,
+    },
+  }
+}
+
+/** One block character per value, scaled from the lowest to the highest; a flat run sits in the middle. */
+export const sparkline = (values: readonly number[]): string => {
+  const lowest = Math.min(...values)
+  const range = Math.max(...values) - lowest
+
+  return values
+    .map(value => SPARK_LEVELS[range === 0 ? 3 : Math.round(((value - lowest) / range) * (SPARK_LEVELS.length - 1))])
+    .join('')
+}

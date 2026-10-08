@@ -1,0 +1,75 @@
+# turntype
+
+A typing test for the time while Claude works. A Claude Code mod.
+
+When a turn takes more than 1.5 seconds, a line shows above the prompt: `press 1: type while you wait (flow)`. Press `1` in an empty prompt (or run `/type`) to open the game. Type the words. Your result, personal best and daily total show when the test ends.
+
+Tested with **Claude Code 2.1.292**. The mods API can change between releases.
+
+## Modes
+
+| Mode | The test ends when |
+| --- | --- |
+| `flow` (default) | Claude is done and you complete the word, or you press Enter |
+| `words` 10 / 25 / 50 / 100 | You type the last word |
+| `time` 15 / 30 / 60 / 120 | The active time runs out (a pause of more than 3 s does not count) |
+
+Pick a mode in the toolbar under the field before the first key (`◍ english ❘ ∿ flow  ◷ time  ☰ words`, the selected one in yellow), or in `/config`. With **adaptive words** on (the default), about a third of the words practice the letter pairs you miss most.
+
+## Word lists
+
+The words come from JSON files in `word-lists/`: `english` (200 common words), `english_1k`, `english_5k` and `english_10k` (the 1,000, 5,000 and about 10,000 most common words, from [Monkeytype](https://github.com/monkeytypegame/monkeytype)), and `code` (keywords, identifiers and symbols such as `=>` and `?.`). To change the list, press its name at the start of the toolbar (`◍ english`) before you start typing, or set **Word list** in `/config`.
+
+To add a list, add a file such as `word-lists/german.json`:
+
+```json
+{ "words": ["und", "der", "die", "das", "..."] }
+```
+
+- The file name is the list's name: lowercase letters, digits, underscores and dashes (`english_1k`).
+- A list needs at least 20 words. A word has no spaces and at most 24 characters. Repeats are removed.
+- A file that is not valid is left out. An unknown name uses `english`.
+- Personal bests are kept per list, so `code` never competes with `english`.
+
+The lists are read when the session starts and when the mod reloads.
+
+## Keys
+
+| Key | Where | What it does |
+| --- | --- | --- |
+| `1` | Empty prompt | Opens the game, continues a test, or goes back to the game after a dialog took the keys |
+| `ctrl+x tab` | Anywhere | Gives the keys back to the game pane |
+| Enter | Game field | Ends the test |
+| Esc | Game pane | Hides the pane. A test in progress waits in the band. |
+| `a` / `x` / `d` | Result card | Again / close / show or hide details |
+
+## Install
+
+From a marketplace that lists the mod:
+
+```text
+/plugin install turntype@<marketplace>
+/reload-plugins
+```
+
+To load the folder for one session: `claude --plugin-dir <path to turntype>`.
+
+## Data
+
+Results are kept in the mod's own store (`~/.claude/plugins/store/`): personal bests per test, the last 200 fair results, daily totals for 400 days, and the letter-pair statistics. Nothing is sent anywhere.
+
+## Develop
+
+```shell
+claude plugin validate --strict .   # manifest, hooks and calls
+claude plugin test .                # engine, flow, probe and cost tests
+tsc -p .                            # types (written by Claude Code into .claude-plugin/types/)
+```
+
+`tests/probe.test.ts` covers the flow and its edge cases. `tests/cost.test.ts` holds the hot paths to zero extra redraws and host calls. Check these by hand, because the test kit cannot press Esc or move `Date.now()`: Esc during a test, and a time test that runs out.
+
+## License
+
+turntype is free software under the [GNU General Public License v3.0 or later](LICENSE).
+
+The word lists `english_1k`, `english_5k` and `english_10k` are copied unchanged from [Monkeytype](https://github.com/monkeytypegame/monkeytype) (`frontend/static/languages/`), © the Monkeytype contributors, licensed under GPL-3.0. The lists `english` and `code` are our own.

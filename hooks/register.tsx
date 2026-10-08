@@ -1,0 +1,606 @@
+import { atom, read, update } from 'claude-code'
+import type { EngineInterface, PaneOpenArgs, Register, Timer, UiOpenResult } from 'claude-code'
+
+import type { TypingRound, TypingRoundFinished, TypingRoundReady, TypingSettings } from '../types'
+import {
+  configKey,
+  LEGACY_PROGRESS_KEY,
+  PART_PARSERS,
+  parseLegacyProgress,
+  personalBestWpms,
+  PROGRESS_PARTS,
+  progressChanges,
+  recordResult,
+  weakBigrams,
+} from './engine/progress'
+import type { ProgressPart, StoredProgress } from './engine/progress'
+import { applyFieldInput, createRound, expireRound, finishByPlayer } from './engine/round'
+import { DEFAULT_SETTINGS, parseTypingSettings } from './engine/settings'
+import { isIdle, isTimeUp } from './engine/timing'
+import { DEFAULT_WORD_LIST_NAME, FALLBACK_WORD_LIST, parseWordList } from './engine/word-list'
+import type { WordList } from './engine/word-list'
+import { backToTypingBand, invitationBand, resultBand } from './view/band'
+import { gameView } from './view/game'
+import { resultCard } from './view/result-card'
+import { paletteFor, THEME_PALETTE } from './view/palette'
+import type { Palette } from './view/palette'
+import { modeLabel } from './view/shared'
+import type { ActiveRound } from './view/shared'
+
+const roundAtom = atom({ plugin: 'turntype', key: 'round' } as const, null)
+const clockTickAtom = atom({ plugin: 'turntype', key: 'clockTick' } as const, 0)
+const isGameOpenAtom = atom({ plugin: 'turntype', key: 'isGameOpen' } as const, false)
+const isPaneFocusedAtom = atom({ plugin: 'turntype', key: 'isPaneFocused' } as const, true)
+const isDetailsShownAtom = atom({ plugin: 'turntype', key: 'isDetailsShown' } as const, false)
+const NO_PERSONAL_BESTS: Readonly<Record<string, number>> = {}
+const personalBestsAtom = atom({ plugin: 'turntype', key: 'personalBests' } as const, NO_PERSONAL_BESTS)
+const NO_BIGRAMS: readonly string[] = []
+const focusBigramsAtom = atom({ plugin: 'turntype', key: 'focusBigrams' } as const, NO_BIGRAMS)
+
+const GAME_PANE_ID = 'turntype'
+/** Every phase draws exactly this many rows, an empty row between each two, so the pane never changes height. */
+const GAME_PANE_ROWS = 9
+const GAME_PANE: PaneOpenArgs = { id: GAME_PANE_ID, title: 'turntype', focus: true, closeOnEscape: true, rows: GAME_PANE_ROWS }
+const APPEAR_AFTER_MS = 1500
+const TICK_MS = 1000
+/** After a permission ask: how often to look whether the dialog gave the keys back. */
+const REFOCUS_POLL_MS = 400
+/** A mode that allows the call shows no dialog: if the pane keeps the keys this long, stop looking. */
+const REFOCUS_DIALOG_WAIT_MS = 3000
+const REFOCUS_GIVE_UP_MS = 60_000
+
+type Dollar = EngineInterface
+
+// Module variables: a hot reload cancels these timers with the old environment.
+let ticker: Timer | undefined
+let refocusTimer: Timer | undefined
+let pendingTurnId: string | undefined
+// From the manifest's userConfig: a change in /config reloads the module, so register sets it again.
+let settings: TypingSettings = DEFAULT_SETTINGS
+// The round being saved: a finish can be seen by two updates before its summary is attached.
+let recordingRoundId: number | undefined
+// The word lists, read from files at session.start (and so on each reload). Not $.state: a round
+// names its list, and $.state would copy every list across the host boundary on each read.
+let wordLists: ReadonlyMap<string, WordList> = new Map([[FALLBACK_WORD_LIST.name, FALLBACK_WORD_LIST]])
+
+const WORD_LISTS_FOLDER = 'word-lists'
+const JSON_EXTENSION = '.json'
+// The colors for the person's Claude Code theme: read at session.start and on a theme change.
+// A module variable, not $.state: the pane draws on every key, and a state read would cost a host
+// call each time; a new theme shows from the next redraw.
+let palette: Palette = THEME_PALETTE
+const THEME_CONFIG_KEY = 'theme'
+
+const isActive = (round: TypingRound | null): round is ActiveRound =>
+  round?.phase === 'ready' || round?.phase === 'running'
+
+const nextRoundId = (round: TypingRound | null): number => (round?.roundId ?? 0) + 1
+
+/** The list by name; an unknown name (a list since removed, a typo in /config) gets English. */
+const wordListFor = (name: string): WordList =>
+  wordLists.get(name) ?? wordLists.get(DEFAULT_WORD_LIST_NAME) ?? FALLBACK_WORD_LIST
+
+const stopTicker = (): void => {
+  ticker?.cancel()
+  ticker = undefined
+}
+
+/**
+ * Each second of a running test: end a time test whose time is up, redraw the clock, and
+ * stop while the player is idle (the next key starts it again), so an idle game costs nothing.
+ * The round is only read: written only when the time ran out, through replaceRound, which saves it.
+ */
+const handleTick = async (dollar: Dollar): Promise<void> => {
+  const now = Date.now()
+  const round = await read(dollar, roundAtom)
+
+  if (round?.phase === 'running' && isTimeUp(round, now)) {
+    await replaceRound(dollar, current => (current === null ? null : expireRound(current, now)))
+
+    return
+  }
+  if (round?.phase !== 'running' || isIdle(round, now)) {
+    stopTicker()
+  }
+  await update(dollar, clockTickAtom, tick => tick + 1)
+}
+
+const syncTicker = (dollar: Dollar, round: TypingRound | null): void => {
+  if (round?.phase !== 'running') {
+    stopTicker()
+  } else if (ticker === undefined) {
+    ticker = dollar.clock.every(TICK_MS, () => void handleTick(dollar))
+  }
+}
+
+/** Keeps in state what a key or a new round reads: the personal bests and the weak letter pairs. */
+const publishProgress = async (dollar: Dollar, progress: StoredProgress): Promise<void> => {
+  await update(dollar, personalBestsAtom, () => personalBestWpms(progress))
+  await update(dollar, focusBigramsAtom, () => weakBigrams(progress))
+}
+
+/** Reads the Claude Code theme from /config; without it (an old host, a test) the theme keys stay. */
+const loadPalette = async (dollar: Dollar): Promise<void> => {
+  try {
+    const theme = (await dollar.config.list()).find(row => row.key === THEME_CONFIG_KEY)?.value
+    palette = paletteFor(typeof theme === 'string' ? theme : '')
+  } catch {
+    palette = THEME_PALETTE
+  }
+}
+
+/** Reads one list file; a file that is not JSON text or not a valid list is left out. */
+const readWordList = async (dollar: Dollar, folder: string, fileName: string): Promise<WordList | undefined> => {
+  try {
+    const content = await dollar.fs.read(`${folder}/${fileName}`)
+
+    return typeof content === 'string' ? parseWordList(fileName.slice(0, -JSON_EXTENSION.length), JSON.parse(content)) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Reads every `word-lists/*.json` of the mod, in name order: a new list is a new file. Without the
+ * folder, or with no valid file, the built-in fallback keeps the game working.
+ */
+const loadWordLists = async (dollar: Dollar): Promise<void> => {
+  const folder = `${dollar.plugin.root}/${WORD_LISTS_FOLDER}`
+
+  try {
+    const fileNames = (await dollar.fs.list(folder))
+      .filter(entry => entry.kind === 'file' && entry.name.endsWith(JSON_EXTENSION))
+      .map(entry => entry.name)
+      .toSorted()
+    const loaded: WordList[] = []
+    for (const fileName of fileNames) {
+      const list = await readWordList(dollar, folder, fileName)
+      if (list !== undefined) {
+        loaded.push(list)
+      }
+    }
+    // The file's English replaces the fallback of the same name.
+    wordLists = new Map([[FALLBACK_WORD_LIST.name, FALLBACK_WORD_LIST], ...loaded.map((list): [string, WordList] => [list.name, list])])
+  } catch {
+    // No folder: the fallback alone.
+  }
+}
+
+/** Reads one saved part; a missing or broken one is empty. */
+const readPart = async <P extends ProgressPart>(dollar: Dollar, part: P): Promise<StoredProgress[P]> =>
+  PART_PARSERS[part](await dollar.store.get(part))
+
+/**
+ * Reads the saved parts. The one record of versions before 0.8 is split into parts no session has
+ * written yet, then deleted: once, and it never replaces a newer part.
+ */
+const readProgress = async (dollar: Dollar): Promise<StoredProgress> => {
+  const legacyValue = await dollar.store.get(LEGACY_PROGRESS_KEY)
+
+  if (legacyValue !== undefined) {
+    const legacy = parseLegacyProgress(legacyValue)
+    const savedKeys = new Set(await dollar.store.keys())
+    for (const part of PROGRESS_PARTS.filter(name => !savedKeys.has(name))) {
+      await dollar.store.set(part, legacy[part])
+    }
+    await dollar.store.delete(LEGACY_PROGRESS_KEY)
+  }
+
+  return {
+    personalBests: await readPart(dollar, 'personalBests'),
+    history: await readPart(dollar, 'history'),
+    daily: await readPart(dollar, 'daily'),
+    bigrams: await readPart(dollar, 'bigrams'),
+  }
+}
+
+/** Reads one part again right before writing it, so a change another session saved meanwhile is merged, not lost. */
+const savePart = async <P extends ProgressPart>(
+  dollar: Dollar,
+  part: P,
+  change: (value: StoredProgress[P]) => StoredProgress[P],
+): Promise<StoredProgress[P]> => {
+  const saved = change(await readPart(dollar, part))
+  await dollar.store.set(part, saved)
+
+  return saved
+}
+
+const loadProgress = async (dollar: Dollar): Promise<void> => {
+  try {
+    await publishProgress(dollar, await readProgress(dollar))
+  } catch {
+    // No store (an old host, a test without one): play on without personal bests.
+  }
+}
+
+/**
+ * Saves a finished test once, then attaches its summary to the round for the result card. The
+ * summary compares with the progress as read; each part is then merged into a fresh read of it.
+ * When the store fails the card shows the result alone; the game never stops for it.
+ */
+const recordProgress = async (dollar: Dollar, round: TypingRoundFinished): Promise<void> => {
+  if (round.progress !== undefined || recordingRoundId === round.roundId) {
+    return
+  }
+  recordingRoundId = round.roundId
+
+  try {
+    const now = Date.now()
+    const { summary } = recordResult(await readProgress(dollar), round, now)
+    const changes = progressChanges(round, now)
+    const saved: StoredProgress = {
+      personalBests: await savePart(dollar, 'personalBests', changes.personalBests),
+      history: await savePart(dollar, 'history', changes.history),
+      daily: await savePart(dollar, 'daily', changes.daily),
+      bigrams: await savePart(dollar, 'bigrams', changes.bigrams),
+    }
+    await publishProgress(dollar, saved)
+    await update(dollar, roundAtom, current =>
+      current?.phase === 'finished' && current.roundId === round.roundId ? { ...current, progress: summary } : current,
+    )
+    if (summary.pb.kind === 'new') {
+      dollar.ui.toast(`new personal best: ${round.result.wpm} wpm ⋅ ${modeLabel(round)}`)
+    }
+  } catch {
+    // The result card stays without its progress line.
+  }
+}
+
+/** The one place a round changes: it runs the clock, and saves a test the moment it finishes. */
+const replaceRound = async (dollar: Dollar, change: (round: TypingRound | null) => TypingRound | null): Promise<void> => {
+  const round = await update(dollar, roundAtom, change)
+  syncTicker(dollar, round)
+
+  if (round?.phase === 'finished') {
+    await recordProgress(dollar, round)
+  }
+}
+
+// Date.now() here, not $.clock.now(): one host call less on every key.
+const handleInput = (
+  dollar: Dollar,
+  roundId: number,
+  fieldIndex: number,
+  fieldBaseLength: number,
+  fieldBaseDropped: number,
+  fieldText: string,
+): void => {
+  const now = Date.now()
+
+  void replaceRound(dollar, round =>
+    isActive(round) && round.roundId === roundId
+      ? applyFieldInput(round, fieldIndex, fieldBaseLength, fieldText, now, { fieldBaseDropped, words: wordListFor(round.wordList).words })
+      : round,
+  )
+}
+
+const handleFinish = (dollar: Dollar, roundId: number): void => {
+  void replaceRound(dollar, round =>
+    round?.phase === 'running' && round.roundId === roundId ? finishByPlayer(round) : round,
+  )
+}
+
+/**
+ * Makes rounds with `chosen`, the weak letter pairs and the personal best, read once here: the
+ * change itself stays synchronous, and a round carries its personal best so a key reads nothing else.
+ */
+const roundMaker = async (dollar: Dollar, chosen: TypingSettings = settings) => {
+  const weak = await read(dollar, focusBigramsAtom)
+  const personalBests = await read(dollar, personalBestsAtom)
+
+  return (previous: TypingRound | null): TypingRoundReady => {
+    const round = createRound(nextRoundId(previous), chosen, weak, wordListFor(chosen.wordList))
+
+    return { ...round, pbWpm: personalBests[configKey(round)] }
+  }
+}
+
+const startNewRound = async (dollar: Dollar): Promise<void> => {
+  const makeRound = await roundMaker(dollar)
+  await replaceRound(dollar, makeRound)
+}
+
+/** The invitation after the delay: a test in progress outlives the turn that started it. */
+const showInvitation = async (dollar: Dollar): Promise<void> => {
+  const makeRound = await roundMaker(dollar)
+  await replaceRound(dollar, round => (round?.phase === 'running' ? round : makeRound(round)))
+}
+
+const USER_CONFIG_FIELDS = ['mode', 'wordCount', 'timeSeconds', 'wordList'] as const
+
+/**
+ * A pick in the pane: the round changes at once, then the choice is saved as userConfig, so
+ * /config and the next session agree. Saved last: each change reloads the module, which reads it.
+ */
+const chooseSettings = async (dollar: Dollar, chosen: TypingSettings): Promise<void> => {
+  const previous = settings
+  settings = chosen
+  const makeRound = await roundMaker(dollar, chosen)
+  await replaceRound(dollar, round => (round?.phase === 'running' ? round : makeRound(round)))
+
+  try {
+    for (const field of USER_CONFIG_FIELDS.filter(name => chosen[name] !== previous[name])) {
+      await dollar.config.set({ key: `turntype.${field}`, value: String(chosen[field]) })
+    }
+  } catch {
+    // Not saved (no such row, a policy lock): the pick still holds for this session.
+  }
+}
+
+const findGamePane = async (dollar: Dollar) => (await dollar.ui.panes()).find(pane => pane.id === GAME_PANE_ID)
+
+/** Writes the focus flag only on a change, so the band is not drawn again for nothing. */
+const setPaneFocused = async (dollar: Dollar, isFocused: boolean): Promise<void> => {
+  if ((await read(dollar, isPaneFocusedAtom)) !== isFocused) {
+    await update(dollar, isPaneFocusedAtom, () => isFocused)
+  }
+}
+
+/**
+ * Opens the game pane with the keyboard; keeps a round in progress, else starts one.
+ * Says whether the pane is drawn: where nothing draws (the VS Code chat panel, `claude -p`) it is not.
+ */
+const openGame = async (dollar: Dollar): Promise<UiOpenResult> => {
+  const makeRound = await roundMaker(dollar)
+  await replaceRound(dollar, round => (isActive(round) ? round : makeRound(round)))
+  await update(dollar, isGameOpenAtom, () => true)
+  const opened = await dollar.ui.open(GAME_PANE)
+  // Focus is a request: text in the composer refuses it, and then the band keeps its way back.
+  await setPaneFocused(dollar, (await findGamePane(dollar))?.isFocused ?? false)
+
+  return opened
+}
+
+const stopRefocus = (): void => {
+  refocusTimer?.cancel()
+  refocusTimer = undefined
+}
+
+/**
+ * A permission dialog takes the keys from the game and hands them to the prompt when it closes.
+ * Watch for that loss, then ask for the keys back until the pane has them: the engine grants it
+ * only over an empty composer, so a prompt the person started to write keeps the keys.
+ */
+const refocusAfterAsk = (dollar: Dollar): void => {
+  stopRefocus()
+  // Counted in polls, the timer's own time: no second clock to disagree with it.
+  let waitedMs = 0
+  let hasLostFocus = false
+
+  const check = async (): Promise<void> => {
+    waitedMs += REFOCUS_POLL_MS
+    const pane = await findGamePane(dollar)
+
+    if (pane === undefined || waitedMs > REFOCUS_GIVE_UP_MS) {
+      stopRefocus()
+    } else if (pane.isFocused) {
+      if (hasLostFocus || waitedMs > REFOCUS_DIALOG_WAIT_MS) {
+        stopRefocus()
+      }
+      await setPaneFocused(dollar, true)
+    } else {
+      hasLostFocus = true
+      await setPaneFocused(dollar, false)
+      await dollar.ui.open(GAME_PANE)
+    }
+  }
+
+  refocusTimer = dollar.clock.every(REFOCUS_POLL_MS, () => void check())
+}
+
+// The mod's own $.ui.close does not reach its own ui.close hook, so reset the flag here too.
+const closeGame = async (dollar: Dollar): Promise<void> => {
+  stopRefocus()
+  await replaceRound(dollar, () => null)
+  await update(dollar, isGameOpenAtom, () => false)
+  await dollar.ui.close({ id: GAME_PANE_ID })
+}
+
+/**
+ * Copies what the store keeps into $.state and matches the pane flags to the engine's own record.
+ * Runs at session start, after a reload, and after /clear, /resume and /branch: those reset every
+ * $.state value to its default, but session.start does not fire again.
+ */
+const syncSession = async (dollar: Dollar): Promise<void> => {
+  recordingRoundId = undefined
+  await loadProgress(dollar)
+  const pane = await findGamePane(dollar)
+  await update(dollar, isGameOpenAtom, () => pane !== undefined)
+  await setPaneFocused(dollar, pane?.isFocused ?? true)
+
+  // A reload keeps the round; a reset leaves none, and an open pane would stay empty.
+  if (pane !== undefined && (await read(dollar, roundAtom)) === null) {
+    await closeGame(dollar)
+  }
+}
+
+export const register: Register = (on, options) => {
+  settings = parseTypingSettings(options)
+
+  on('session.start', async ($, e, next) => {
+    const result = await next(e)
+    // Lists and colors first: syncSession may draw, and a new round names its list.
+    await loadWordLists($)
+    await loadPalette($)
+    await syncSession($)
+    // Last: a refused name throws, and nothing after it would run.
+    await $.command.register({
+      name: 'type',
+      description: 'Type while Claude works: open the turntype game',
+      immediate: true,
+    })
+
+    return result
+  })
+
+  // A new theme in /config: the colors follow from the next redraw.
+  on('config.set', { key: THEME_CONFIG_KEY }, async ($, e, next) => {
+    const result = await next(e)
+    palette = paletteFor(typeof e.value === 'string' ? e.value : '')
+
+    return result
+  }).catch(($, e, next) => next(e))
+
+  // /clear, /resume and /branch reset $.state without a new session.start: load and match again.
+  on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
+    const result = await next(e)
+    await syncSession($)
+
+    return result
+  }).catch(($, e, next) => next(e))
+
+  // Where nothing draws, say so: an empty answer would look like a command that did nothing.
+  on('command.run', { command: 'type' }, async $ => {
+    const opened = await openGame($)
+
+    return opened.isPlaced ? {} : { text: `the game needs the terminal or the Desktop app (${opened.reason})` }
+  })
+
+  // Each .catch passes the event on: in a handler next is replay-safe, so a hook that failed after
+  // its next(e) keeps that result and nothing beneath runs twice.
+  on('ui.close', { id: GAME_PANE_ID }, async ($, e, next) => {
+    const result = await next(e)
+    stopRefocus()
+    await update($, isGameOpenAtom, () => false)
+    // A test in progress waits in the band; an untouched round stays only while Claude still works.
+    const isTurnRunning = pendingTurnId !== undefined
+    await replaceRound($, round =>
+      round?.phase === 'running' || (round?.phase === 'ready' && isTurnRunning) ? round : null,
+    )
+
+    return result
+  }).catch(($, e, next) => next(e))
+
+  // The field's autoFocus takes the ring whenever the pane takes the keyboard: a click, ctrl+x tab, an open.
+  on('ui.focus', { requestId: GAME_PANE_ID }, async ($, e, next) => {
+    const result = await next(e)
+
+    if (result.deny === undefined) {
+      await setPaneFocused($, true)
+    }
+
+    return result
+  }).catch(($, e, next) => next(e))
+
+  // A permission dialog is about to take the keys from a game in play: get them back after it.
+  // The verdict is passed on as it came; a failure here only skips the refocus (the band still
+  // offers the way back), and the .catch hands on the verdict next(e) settled to.
+  on('tool.check', async ($, e, next) => {
+    const result = await next(e)
+
+    // A query (no dialog) is harmless here: the pane keeps the keys and the watch stops.
+    if (result.decision === 'ask' && isActive(await read($, roundAtom)) && (await findGamePane($))?.isFocused) {
+      refocusAfterAsk($)
+    }
+
+    return result
+  }).catch(($, e, next) => next(e))
+
+  on('turn.start', async ($, e, next) => {
+    const result = await next(e)
+    const turnId = e.turnId
+    pendingTurnId = turnId
+
+    // Short turns never show the invitation; a test in progress outlives the turn that started it.
+    $.clock.after(APPEAR_AFTER_MS, () => {
+      if (pendingTurnId === turnId) {
+        void showInvitation($)
+      }
+    })
+
+    return result
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+
+    if (!e.agentId) {
+      pendingTurnId = undefined
+      // The person writes the next prompt now: never take the keys from them.
+      stopRefocus()
+      const isGameOpen = await read($, isGameOpenAtom)
+      await replaceRound($, round => {
+        // An untouched invitation leaves with the turn; an open game stays for the player.
+        if (round?.phase === 'ready') {
+          return isGameOpen ? round : null
+        }
+
+        return round?.phase === 'running' ? { ...round, isClaudeDone: true } : round
+      })
+    }
+
+    return result
+  })
+
+  // The band: a one-line invitation, or the way back to an open pane that lost the keys.
+  // Its digit hotkey also fires from an empty prompt.
+  // Hot path: while the game is open and holds the keys the band is empty, and returns before it
+  // reads the round, so it is not subscribed to it and a key never draws it again. The open flag
+  // is kept by openGame, closeGame, the ui.close hook and session.start, so no host call here.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) {
+      return next(e)
+    }
+    const isGameOpen = await read($, isGameOpenAtom)
+
+    if (isGameOpen && (await read($, isPaneFocusedAtom))) {
+      return next(e)
+    }
+    const round = await read($, roundAtom)
+
+    if (round === null) {
+      return next(e)
+    }
+
+    const elements = $.ui.resolve(e)
+    const openFromBand = () => void openGame($)
+
+    if (isGameOpen) {
+      return isActive(round) ? backToTypingBand(elements, round, openFromBand) : next(e)
+    }
+
+    return round.phase === 'finished' ? resultBand(elements, round, palette, openFromBand) : invitationBand(elements, round, openFromBand)
+  })
+
+  // The game pane: nine rows in every phase. Words, the field and live stats, then the picker
+  // or the key hints; or the result card.
+  on('ui.render', { component: 'Pane', requestId: GAME_PANE_ID }, async ($, e, next) => {
+    const round = await read($, roundAtom)
+    const elements = $.ui.resolve(e)
+
+    if (round === null || !('Input' in elements)) {
+      return next(e)
+    }
+
+    if (round.phase === 'finished') {
+      return resultCard(
+        elements,
+        round,
+        { isTerminal: e.surface === 'terminal', isDetailsShown: await read($, isDetailsShownAtom), settings, wordListNames: [...wordLists.keys()], palette },
+        {
+          onAgain: () => void startNewRound($),
+          onClose: () => void closeGame($),
+          onToggleDetails: () => void update($, isDetailsShownAtom, isShown => !isShown),
+          onChoose: chosen => void chooseSettings($, chosen),
+        },
+      )
+    }
+
+    // Subscribes the pane to the ticker while a test runs.
+    if (round.phase === 'running') {
+      await read($, clockTickAtom)
+    }
+
+    return gameView(
+      elements,
+      round,
+      { bodyColumns: e.props.bodyColumns, isFocused: e.props.isFocused, now: Date.now(), settings, wordListNames: [...wordLists.keys()], palette },
+      {
+        onInput: (roundId, fieldIndex, fieldBaseLength, fieldBaseDropped, text) => handleInput($, roundId, fieldIndex, fieldBaseLength, fieldBaseDropped, text),
+        onFinish: roundId => handleFinish($, roundId),
+        onChoose: chosen => void chooseSettings($, chosen),
+      },
+    )
+  })
+}
