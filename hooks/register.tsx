@@ -4,7 +4,7 @@ import type { EngineInterface, PaneOpenArgs, Register, Timer, UiOpenResult } fro
 import type { TypingDayStanding, TypingGame, TypingPicks, TypingRound, TypingRoundFinished, TypingRoundReady, TypingSettings } from '../types'
 import { bandKind, isActive, keepsRound, readableGame, roundAfter } from './engine/lifecycle'
 import type { RoundNeed } from './engine/lifecycle'
-import { DEFAULT_WORD_LIST } from './engine/modes'
+import { FALLBACK_LIST_NAME } from './engine/modes'
 import {
   configKey,
   dayStanding,
@@ -74,8 +74,8 @@ const JSON_EXTENSION = '.json'
 const THEME_CONFIG_KEY = 'theme'
 
 // The lists the toolbar names: every `*.json` in word-lists/, by file name, read at start. English
-// is always one: without its file the built-in list stands in.
-let listNames: readonly string[] = [DEFAULT_WORD_LIST]
+// is always one: without its file the built-in words stand in.
+let listNames: readonly string[] = [FALLBACK_LIST_NAME]
 // The lists read so far. A file is read the first time its list is needed (the one in use at start,
 // or a pick), then kept: a start reads one file, not every list.
 let wordLists: ReadonlyMap<string, WordList> = new Map()
@@ -83,7 +83,7 @@ let wordLists: ReadonlyMap<string, WordList> = new Map()
 let palette: Palette = THEME_PALETTE
 
 /** The list by name, once read; one not read (or gone) gets English, its file's or the built-in one. */
-const wordListFor = (name: string): WordList => wordLists.get(name) ?? wordLists.get(DEFAULT_WORD_LIST) ?? FALLBACK_WORD_LIST
+const wordListFor = (name: string): WordList => wordLists.get(name) ?? wordLists.get(FALLBACK_LIST_NAME) ?? FALLBACK_WORD_LIST
 
 const listFolder = (dollar: Dollar): string => `${dollar.plugin.root}/${WORD_LISTS_FOLDER}`
 
@@ -94,9 +94,9 @@ const loadListNames = async (dollar: Dollar): Promise<void> => {
       .filter(entry => entry.kind === 'file' && entry.name.endsWith(JSON_EXTENSION))
       .map(entry => entry.name.slice(0, -JSON_EXTENSION.length))
       .filter(isWordListName)
-    listNames = [...new Set([DEFAULT_WORD_LIST, ...names])]
+    listNames = [...new Set([FALLBACK_LIST_NAME, ...names])]
   } catch {
-    listNames = [DEFAULT_WORD_LIST]
+    listNames = [FALLBACK_LIST_NAME]
   }
   // A reload reads the files again: one changed since is read as it is now.
   wordLists = new Map()
@@ -117,7 +117,7 @@ const ensureList = async (dollar: Dollar, name: string): Promise<boolean> => {
 
     return true
   }
-  if (name === DEFAULT_WORD_LIST) {
+  if (name === FALLBACK_LIST_NAME) {
     // Read once, broken or missing: the built-in English stands in from now on.
     wordLists = new Map([...wordLists, [name, FALLBACK_WORD_LIST]])
 
@@ -561,8 +561,14 @@ export const register: Register = (on, options) => {
       loadPalette($),
       syncSession($),
     ])
-    // The one list file a start reads: the list in use, known once the picks are.
-    await ensureList($, (await readSettings($)).wordList)
+    // The one list file a start reads: the list in use, known once the picks are. A round made before
+    // (a /type at the very start) with another list, and not typed in yet, is made again with it.
+    const settings = await readSettings($)
+    await ensureList($, settings.wordList)
+    const round = await readRound($)
+    if (round?.phase === 'ready' && round.wordList !== settings.wordList) {
+      await ensureRound($, 'settings')
+    }
     // Lists and colors are module variables, not state: a pane drawn before they were read (a
     // reload draws the open pane at once) is drawn again with them.
     $.ui.invalidate('ui.render')

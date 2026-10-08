@@ -42,8 +42,11 @@ export const MODES: ModeTable = {
 
 export const DEFAULT_MODE: TypingMode = 'flow'
 
-/** The list a new player types, and the one an unknown list name falls back to. */
-export const DEFAULT_WORD_LIST = 'english'
+/** The list a new player types: the 1,000 most common English words. */
+export const DEFAULT_WORD_LIST = 'english_1k'
+
+/** The list that is always there: `english.json`, or without it the built-in words. Any list that cannot be had falls back to it. */
+export const FALLBACK_LIST_NAME = 'english'
 
 /** The modes in toolbar order. */
 export const TYPING_MODES = Object.keys(MODES) as readonly TypingMode[]

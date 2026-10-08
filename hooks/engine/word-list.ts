@@ -1,4 +1,4 @@
-import { DEFAULT_WORD_LIST } from './modes'
+import { FALLBACK_LIST_NAME } from './modes'
 
 /**
  * A word list: what a test picks its words from. The lists are JSON files in the mod's
@@ -15,7 +15,7 @@ export type WordList = {
  * read. (The `english_1k`/`_5k`/`_10k` files are Monkeytype's, GPL-3.0: see the README.)
  */
 export const FALLBACK_WORD_LIST: WordList = {
-  name: DEFAULT_WORD_LIST,
+  name: FALLBACK_LIST_NAME,
   words: [
     'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'it',
     'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this',

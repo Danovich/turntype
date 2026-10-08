@@ -6,7 +6,7 @@ import { MODES } from './modes'
  * One rule pauses every interruption (Esc, a closed pane, a permission prompt, a break):
  * of any gap between two inputs, only this much counts as test time.
  */
-export const IDLE_PAUSE_MS = 3000
+export const IDLE_PAUSE_MS = 2000
 
 /** The part of a gap between inputs that is left out of the test. */
 export const pausedPartOfGap = (gapMs: number): number => Math.max(0, gapMs - IDLE_PAUSE_MS)

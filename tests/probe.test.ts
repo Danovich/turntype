@@ -4,7 +4,7 @@
  *
  * Time here is the mocked `$.clock`. The mod reads `Date.now()` for typing speed and for the time
  * limit, which the mocked clock does not move: the probes of a time test running out and of idle
- * pauses wait in real time (a 1 s time test, a 3 s pause), with the clock advanced for the ticks.
+ * pauses wait in real time (a 1 s time test, a 2 s pause), with the clock advanced for the ticks.
  * The test's `$` raises events, not engine calls: it cannot press Esc on the pane (`ui.close`), and
  * it types only into a field on show, so a late key in a replaced field is covered by engine.test.ts.
  * Check by hand: Esc during a test keeps it in the band ("continue"); Esc on an untouched
@@ -1046,10 +1046,10 @@ describe('probe: toolbar and word list', () => {
     await $.session.start(SESSION)
     const { pane } = await openFromBand($, clock)
 
-    expect(await listRow(pane)).toEqual(['english'])
+    expect(await listRow(pane)).toEqual(['english_1k'])
     await pane.press({ key: 'pick-list' })
     // The one in use, then the others in name order, numbers in natural order.
-    expect(await listRow(pane)).toEqual(['english', 'code', 'english_1k', 'english_10k'])
+    expect(await listRow(pane)).toEqual(['english_1k', 'code', 'english', 'english_10k'])
 
     await pane.press({ key: 'pick-list-code' })
     expect(await currentWord(pane)).toMatch(/^code\d+$/)
@@ -1092,14 +1092,14 @@ describe('probe: toolbar and word list', () => {
     const { pane } = await openFromBand($, clock)
 
     await pane.press({ key: 'pick-list' })
-    expect(await listRow(pane)).toEqual(['english', 'broken', 'code', 'english_1k', 'english_10k'])
+    expect(await listRow(pane)).toEqual(['english_1k', 'broken', 'code', 'english', 'english_10k'])
     await pane.press({ key: 'pick-list-broken' })
 
     expect(world.toasts).toEqual(["couldn't read the list broken: its file is not a word list"])
-    expect(await currentWord(pane)).toMatch(/^eng\d+$/)
+    expect(await currentWord(pane)).toMatch(/^mid\d+$/)
     expect(world.saved.get('settings')).toBeUndefined()
     await pane.press({ key: 'pick-list' })
-    expect(await listRow(pane)).toEqual(['english', 'code', 'english_1k', 'english_10k'])
+    expect(await listRow(pane)).toEqual(['english_1k', 'code', 'english', 'english_10k'])
   })
 
   test('with one list it opens to nothing else', async ($, on) => {
@@ -1121,8 +1121,10 @@ describe('probe: toolbar and word list', () => {
     await pane.press({ key: 'pick-list' })
     expect(await listRow(pane)).toEqual(['english'])
 
+    // The round, made before the lists, was not typed in: made again with the default list.
     await $.session.start(SESSION)
-    expect(await listRow(pane)).toEqual(['english', 'code', 'english_1k', 'english_10k'])
+    expect(await listRow(pane)).toEqual(['english_1k', 'code', 'english', 'english_10k'])
+    expect(await currentWord(pane)).toMatch(/^mid\d+$/)
   })
 
   test('the toolbar closed: the list, the modes with icons and counts, the mode in use bright, the rest dim', async ($, on) => {
@@ -1393,8 +1395,8 @@ describe('probe: every flow through the pane', () => {
     const { pane } = await openFromBand($, clock)
     await typeNextWord(pane)
 
-    // Past the 3 s idle limit in real time, then a tick redraws the status.
-    await realWait(3200)
+    // Past the 2 s idle limit in real time, then a tick redraws the status.
+    await realWait(2200)
     await clock.advance(1000)
     expect(await pane.find({ type: 'Text', text: 'paused ⋅ type to resume' })).toBeDefined()
 

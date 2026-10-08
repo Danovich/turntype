@@ -193,9 +193,10 @@ describe('engine', () => {
     expect(kogasa(0.5)).toBeLessThan(60)
   })
 
-  test('pause: of a 60 s gap only 3 s count, so the break leaves wpm and the samples alone', async () => {
+  test('pause: of a 62 s gap only 2 s count, so the break leaves wpm and the samples alone', async () => {
     const started = asRunning(play(READY, FIRST_FIELD, 't', 0))
-    const beforeBreak = asRunning(play(started, FIRST_FIELD, 'the ', 3000))
+    const typing = asRunning(play(started, FIRST_FIELD, 'th', 2000))
+    const beforeBreak = asRunning(play(typing, FIRST_FIELD, 'the ', 4000))
     const afterBreak = asRunning(play(beforeBreak, drawnOf(beforeBreak.field), 'quick ', 66_000))
 
     expect(afterBreak.pausedMs).toBe(60_000)
@@ -209,24 +210,24 @@ describe('engine', () => {
   test('the clock stops while idle', async () => {
     const started = asRunning(play(READY, FIRST_FIELD, 't', 1000))
 
-    expect(isIdle(started, 3500)).toBe(false)
-    expect(isIdle(started, 4500)).toBe(true)
-    expect(activeElapsedMs(started, 10_000)).toBe(3000)
+    expect(isIdle(started, 2900)).toBe(false)
+    expect(isIdle(started, 3100)).toBe(true)
+    expect(activeElapsedMs(started, 10_000)).toBe(2000)
   })
 
   test('time mode: ends at the limit of active time, measured over exactly the limit', async () => {
     const timed: TypingRoundReady = { ...READY, mode: 'time', count: 15 }
-    // 6 keys, 2.8 s apart (under the idle limit): the last one lands at 14 s of active time.
-    const nearEnd = asRunning(typeEvenly(timed, 'the qu', 0, 2800))
+    // 8 keys, 1.9 s apart (under the idle limit): the last one lands at 13.3 s of active time.
+    const nearEnd = asRunning(typeEvenly(timed, 'the quic', 0, 1900))
 
-    expect(activeElapsedMs(nearEnd, 14_000)).toBe(14_000)
+    expect(activeElapsedMs(nearEnd, 13_300)).toBe(13_300)
     expect(expireRound(nearEnd, 14_500).phase).toBe('running')
     const expired = expireRound(nearEnd, 15_500)
     expect(expired.phase).toBe('finished')
     if (expired.phase === 'finished') {
       expect(expired.result.durationMs).toBe(15_000)
-      // "the " plus the correct prefix "qu": 6 chars in 15 s is 5 wpm (rounded from 4.8).
-      expect(expired.result.wpm).toBe(5)
+      // "the " plus the correct prefix "quic": 8 chars in 15 s is 6 wpm (rounded from 6.4).
+      expect(expired.result.wpm).toBe(6)
     }
     // A key that arrives after the time is up ends the test without counting.
     expect(play(nearEnd, drawnOf(nearEnd.field), 'qui', 15_800).phase).toBe('finished')
@@ -253,7 +254,7 @@ describe('engine', () => {
   })
 
   test('settings: the defaults come from the mode table; /config gives adaptive alone', async () => {
-    expect(DEFAULT_SETTINGS).toEqual({ mode: 'flow', counts: { time: 30, words: 25 }, isAdaptive: true, wordList: 'english' })
+    expect(DEFAULT_SETTINGS).toEqual({ mode: 'flow', counts: { time: 30, words: 25 }, isAdaptive: true, wordList: 'english_1k' })
     expect(parseTypingSettings({ adaptive: 'off' })).toEqual({ ...DEFAULT_SETTINGS, isAdaptive: false })
     // The rows /config no longer has are left alone, whatever an old settings file holds.
     expect(parseTypingSettings({ mode: 'time', wordList: 'code' })).toEqual(DEFAULT_SETTINGS)
@@ -275,7 +276,7 @@ describe('engine', () => {
     expect(parseSavedPicks({ mode: 'zen', counts: { time: 'many' }, wordList: '../secrets' }, DEFAULT_SETTINGS)).toEqual({
       mode: 'flow',
       counts: { time: 30, words: 25 },
-      wordList: 'english',
+      wordList: 'english_1k',
     })
   })
 

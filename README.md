@@ -14,13 +14,13 @@ Tested with **Claude Code 2.1.292**. The mods API can change between releases.
 | --- | --- |
 | `flow` (default) | Claude is done and you complete the word, or you press Enter |
 | `words` 10 / 25 / 50 / 100 | You type the last word |
-| `time` 15 / 30 / 60 / 120 | The active time runs out (a pause of more than 3 s does not count) |
+| `time` 15 / 30 / 60 / 120 | The active time runs out (a pause of more than 2 s does not count) |
 
-Pick a mode in the toolbar under the field before the first key (`◍ english ❘ ∿ flow  ◷ time (30)  ☰ words (25)`, the ones in use bright): press **Tab** to reach it, then Enter, or click. A press on the list, time or words shows its options (`◷ time  15  30  60  120`); a pick closes them and the field takes the keys again. Picks are saved for the next session. With **adaptive words** on (the default; turn it off in `/config`), about a third of the words practice the letter pairs you miss most.
+Pick a mode in the toolbar under the field before the first key (`◍ english_1k ❘ ∿ flow  ◷ time (30)  ☰ words (25)`, the ones in use bright): press **Tab** to reach it, then Enter, or click. A press on the list, time or words shows its options (`◷ time  15  30  60  120`); a pick closes them and the field takes the keys again. Picks are saved for the next session. With **adaptive words** on (the default; turn it off in `/config`), about a third of the words practice the letter pairs you miss most.
 
 ## Word lists
 
-The words come from JSON files in `word-lists/`: `english` (200 common words), `english_1k`, `english_5k` and `english_10k` (the 1,000, 5,000 and about 10,000 most common words, from [Monkeytype](https://github.com/monkeytypegame/monkeytype)). To change the list, open it in the toolbar before you start typing (`◍ english`): every list shows by its file name.
+The words come from JSON files in `word-lists/`: `english` (200 common words), `english_1k`, `english_5k` and `english_10k` (the 1,000, 5,000 and about 10,000 most common words, from [Monkeytype](https://github.com/monkeytypegame/monkeytype)). `english_1k` is the default. To change the list, open it in the toolbar before you start typing (`◍ english_1k`): every list shows by its file name.
 
 To add a list, add a file such as `word-lists/german.json`:
 
@@ -75,4 +75,4 @@ tsc -p .                            # types (written by Claude Code into .claude
 
 turntype is free software under the [GNU General Public License v3.0 or later](LICENSE).
 
-The word lists `english_1k`, `english_5k` and `english_10k` are copied unchanged from [Monkeytype](https://github.com/monkeytypegame/monkeytype) (`frontend/static/languages/`), © the Monkeytype contributors, licensed under GPL-3.0. The lists `english` and `code` are our own.
+The word lists `english_1k`, `english_5k` and `english_10k` are copied unchanged from [Monkeytype](https://github.com/monkeytypegame/monkeytype) (`frontend/static/languages/`), © the Monkeytype contributors, licensed under GPL-3.0. The list `english` is our own.

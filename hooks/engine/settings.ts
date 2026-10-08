@@ -1,7 +1,7 @@
 import type { PluginOptions } from 'claude-code'
 
 import type { TypingCountedMode, TypingPicks, TypingSettings } from '../../types'
-import { COUNTED_MODES, DEFAULT_COUNTS, DEFAULT_MODE, DEFAULT_WORD_LIST, isCountedMode, isTypingMode } from './modes'
+import { COUNTED_MODES, DEFAULT_COUNTS, DEFAULT_MODE, DEFAULT_WORD_LIST, FALLBACK_LIST_NAME, isCountedMode, isTypingMode } from './modes'
 import { isWordListName } from './word-list'
 
 /** The settings before any pick: the defaults of `modes.ts`, adaptive words on. */
@@ -19,14 +19,16 @@ export const PICKED_SETTINGS_KEY = 'settings'
 export const picksOf = (settings: TypingSettings): TypingPicks => ({ mode: settings.mode, counts: settings.counts, wordList: settings.wordList })
 
 /**
- * The settings in use: the picks over the defaults. A picked list whose file is gone (deleted from
- * `word-lists/`) gives way to the default list, so the toolbar and the personal bests never name
- * a list the words do not come from. The pick stays saved: the list is back when its file is.
+ * The settings in use: the picks over the defaults. A list that is not there (its file deleted from
+ * `word-lists/`) gives way to the default list, and that one to English, which always is: the toolbar
+ * and the personal bests never name a list the words do not come from. The pick stays saved: the
+ * list is back when its file is.
  */
-export const settingsInUse = (defaults: TypingSettings, picks: TypingPicks | null, isLoadedList: (name: string) => boolean): TypingSettings => {
+export const settingsInUse = (defaults: TypingSettings, picks: TypingPicks | null, isKnownList: (name: string) => boolean): TypingSettings => {
   const settings = picks === null ? defaults : { ...defaults, ...picks }
+  const wordList = [settings.wordList, defaults.wordList].find(isKnownList) ?? FALLBACK_LIST_NAME
 
-  return isLoadedList(settings.wordList) ? settings : { ...settings, wordList: DEFAULT_WORD_LIST }
+  return wordList === settings.wordList ? settings : { ...settings, wordList }
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
