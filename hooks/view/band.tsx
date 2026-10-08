@@ -51,11 +51,11 @@ const MINUTE_MS = 60_000
 /** A one-day run is no streak worth a word. */
 const MIN_STREAK_SHOWN = 2
 
-/** `2/5 min today ⋅ 4-day streak`, or `keep your 4-day streak` before today's first test; met: `✓ 5 min today`. */
+/** `2/5 min today ⋅ 4-day streak`, or `keep your 4-day streak` before today's first test; met: `✓ daily goal met (5 min)`. */
 const dailyGoalRow = ({ Box, Text }: BandElements, { practice, goalMinutes }: DailyGoal, palette: Palette) => {
   const minutes = Math.floor(practice.activeMs / MINUTE_MS)
   const isMet = goalMinutes !== undefined && minutes >= goalMinutes
-  const goal = goalMinutes === undefined ? [] : [isMet ? `${minutes} min today` : `${minutes}/${goalMinutes} min today`]
+  const goal = goalMinutes === undefined ? [] : [isMet ? `daily goal met (${goalMinutes} min)` : `${minutes}/${goalMinutes} min today`]
   const streak = practice.streakDays < MIN_STREAK_SHOWN ? [] : [`${practice.isPlayedToday ? '' : 'keep your '}${practice.streakDays}-day streak`]
   const parts = [...goal, ...streak]
 

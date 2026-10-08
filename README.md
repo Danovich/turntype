@@ -4,7 +4,7 @@ A typing test for the time while Claude works. A Claude Code mod.
 
 When a turn takes more than 3 seconds, a line shows above the prompt: `press 1: type while you wait`. Press `1` in an empty prompt (or run `/type`) to open the game. Type the words. Your result, personal best and daily total show when the test ends.
 
-Beside the invitation, a dim note keeps today in view: `2/5 min today ⋅ 4-day streak`. Before your first test of the day it reads `keep your 4-day streak`; with the goal met, `✓ 5 min today`. Any day with a test keeps the streak. A toast marks a new personal best and each milestone the first time you reach it: 40 to 100 wpm by tens, then 120 and 150, and 3, 7, 30 and 100-day streaks. Set the goal in `/config` under **Daily goal (minutes)** (3 to 30, default 5), or `off` for the streak alone.
+Beside the invitation, a dim note keeps today in view: `2/5 min today ⋅ 4-day streak`. Before your first test of the day it reads `keep your 4-day streak`; with the goal met, `✓ daily goal met (5 min)`. Any day with a test keeps the streak. Set the goal in `/config` under **Daily goal (minutes)** (3 to 30, default 5), or `off` for the streak alone. A toast marks a new personal best and each milestone the first time you reach it: 40 to 100 wpm by tens, then 120 and 150, and 3, 7, 30 and 100-day streaks.
 
 Tested with **Claude Code 2.1.292**. The mods API can change between releases.
 
