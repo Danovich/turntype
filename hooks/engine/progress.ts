@@ -300,6 +300,29 @@ export const recordResult = (progress: StoredProgress, round: TypingRoundFinishe
   }
 }
 
+/** Speeds worth a toast the first time a fair test reaches them: every 10 wpm early on, so a player improving sees one often. */
+const WPM_MILESTONES = [40, 50, 60, 70, 80, 90, 100, 120, 150] as const
+const STREAK_MILESTONES = [3, 7, 30, 100] as const
+
+const bestWpm = (progress: StoredProgress): number => Math.max(0, ...Object.values(progress.personalBests).map(best => best.wpm))
+
+const streakAt = (progress: StoredProgress, now: number): number => todayPractice(dayStanding(progress.daily, now), now).streakDays
+
+/** The highest milestone passed going from `before` to `after`: `before < m <= after`. */
+const highestPassed = (milestones: readonly number[], before: number, after: number): number | undefined =>
+  milestones.findLast(milestone => before < milestone && milestone <= after)
+
+/**
+ * What a test reached for the first time, from the saved progress before and after it: the
+ * highest new speed (any mode or list, fair tests only), and a streak length. No record of its own.
+ */
+export const milestonesReached = (before: StoredProgress, after: StoredProgress, now: number): readonly string[] => {
+  const wpm = highestPassed(WPM_MILESTONES, bestWpm(before), bestWpm(after))
+  const streak = highestPassed(STREAK_MILESTONES, streakAt(before, now), streakAt(after, now))
+
+  return [...(wpm === undefined ? [] : [`first ${wpm} wpm test`]), ...(streak === undefined ? [] : [`${streak}-day streak`])]
+}
+
 /** One block character per value, scaled from the lowest to the highest; a flat run sits in the middle. */
 export const sparkline = (values: readonly number[]): string => {
   const lowest = Math.min(...values)

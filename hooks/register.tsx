@@ -9,6 +9,7 @@ import {
   configKey,
   dayStanding,
   LEGACY_PROGRESS_KEY,
+  milestonesReached,
   PART_PARSERS,
   parseLegacyProgress,
   personalBestWpms,
@@ -31,7 +32,7 @@ import { paletteFor, THEME_PALETTE } from './view/palette'
 import type { Palette } from './view/palette'
 import type { OpenOptions, PickerActions, PickerProps } from './view/picker'
 import { resultCard } from './view/result-card'
-import { modeLabel } from './view/shared'
+import { resultToast } from './view/shared'
 
 /*
  * The shell: everything that reaches outside through `$` (state, the store, files, timers, the
@@ -225,7 +226,8 @@ const loadProgress = async (dollar: Dollar): Promise<void> => {
 const recordProgress = async (dollar: Dollar, round: TypingRoundFinished): Promise<void> => {
   try {
     const now = Date.now()
-    const { summary } = recordResult(await readProgress(dollar), round, now)
+    const before = await readProgress(dollar)
+    const { progress: after, summary } = recordResult(before, round, now)
     const changes = progressChanges(round, now)
     const saved: StoredProgress = {
       personalBests: await savePart(dollar, 'personalBests', changes.personalBests),
@@ -237,8 +239,9 @@ const recordProgress = async (dollar: Dollar, round: TypingRoundFinished): Promi
     await update(dollar, roundAtom, current =>
       current?.phase === 'finished' && current.roundId === round.roundId ? { ...current, progress: summary } : current,
     )
-    if (summary.pb.kind === 'new') {
-      dollar.ui.toast(`new personal best: ${round.result.wpm} wpm ⋅ ${modeLabel(round)}`)
+    const toast = resultToast(round, summary, milestonesReached(before, after, now))
+    if (toast !== undefined) {
+      dollar.ui.toast(toast)
     }
   } catch {
     // The result card stays without its progress line.

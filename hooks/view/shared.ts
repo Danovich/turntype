@@ -1,6 +1,6 @@
 import type { Elements } from 'claude-code'
 
-import type { TypingRound, TypingRoundRunning } from '../../types'
+import type { TypingProgressSummary, TypingRound, TypingRoundFinished, TypingRoundRunning } from '../../types'
 import { MODES } from '../engine/modes'
 import { committedWordCount } from '../engine/window'
 
@@ -29,4 +29,15 @@ export const progressLabel = (round: TypingRoundRunning): string => {
 
   // Out of the count where the test ends on its last word; else the words so far.
   return MODES[round.mode].endsWhen === 'lastWord' ? `${committedCount}/${round.count}` : `${committedCount} ${committedCount === 1 ? 'word' : 'words'}`
+}
+
+/**
+ * One toast for a saved test, or none: a new personal best and the milestones reached, together,
+ * so they never queue up. `✦ new personal best: 61 wpm ⋅ time 30 ⋅ first 60 wpm test`.
+ */
+export const resultToast = (round: TypingRoundFinished, summary: TypingProgressSummary, milestones: readonly string[]): string | undefined => {
+  const best = summary.pb.kind === 'new' ? [`new personal best: ${round.result.wpm} wpm ⋅ ${modeLabel(round)}`] : []
+  const parts = [...best, ...milestones]
+
+  return parts.length === 0 ? undefined : `✦ ${parts.join(' ⋅ ')}`
 }

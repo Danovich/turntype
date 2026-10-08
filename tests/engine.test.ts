@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { TypingRound, TypingRoundFinished, TypingRoundReady, TypingRoundRunning } from '../types'
-import { applyProgressChanges, dayStanding, EMPTY_PROGRESS, parseLegacyProgress, progressChanges, recordResult, sparkline, todayPractice, weakBigrams } from '../hooks/engine/progress'
+import { applyProgressChanges, dayStanding, EMPTY_PROGRESS, milestonesReached, parseLegacyProgress, progressChanges, recordResult, sparkline, todayPractice, weakBigrams } from '../hooks/engine/progress'
 import { FALLBACK_WORD_LIST, parseWordList, pickWords, wordListOrder } from '../hooks/engine/word-list'
 import { applyFieldInput, createRound, expireRound, finishByPlayer, finishRound, ROUND_ENDING } from '../hooks/engine/round'
 import { DEFAULT_SETTINGS, parseDailyGoalMinutes, parseSavedPicks, parseTypingSettings } from '../hooks/engine/settings'
@@ -12,6 +12,7 @@ import { parseTyped } from '../hooks/engine/typed-text'
 import { buildVisibleLines, LETTER_STYLE } from '../hooks/engine/layout'
 import { bandKind, keepsRound, roundAfter } from '../hooks/engine/lifecycle'
 import { bigNumberRows } from '../hooks/engine/big-digits'
+import { resultToast } from '../hooks/view/shared'
 import { EMPTY_FOLD, foldWindow } from '../hooks/engine/window'
 import { scoreWord, totalSamples } from '../hooks/engine/stats'
 
@@ -394,6 +395,29 @@ describe('progress', () => {
 
     expect(todayPractice(standing, DAY_ONE_NOON)).toEqual({ activeMs: 0, streakDays: 1, isPlayedToday: false })
     expect(todayPractice(standing, DAY_ONE_NOON + DAY_MS)).toEqual({ activeMs: 0, streakDays: 0, isPlayedToday: false })
+  })
+
+  test('milestones: the highest new speed once, a streak length once, nothing for an unfair test', async () => {
+    const first = recordResult(EMPTY_PROGRESS, finished({ wpm: 45 }), DAY_ONE_NOON - 2 * DAY_MS)
+    const faster = recordResult(first.progress, finished({ wpm: 72 }), DAY_ONE_NOON - DAY_MS)
+    const again = recordResult(faster.progress, finished({ wpm: 75 }), DAY_ONE_NOON - DAY_MS)
+    const third = recordResult(again.progress, finished({ wpm: 101 }, { ending: 'early' }), DAY_ONE_NOON)
+
+    expect(milestonesReached(EMPTY_PROGRESS, first.progress, DAY_ONE_NOON - 2 * DAY_MS)).toEqual(['first 40 wpm test'])
+    expect(milestonesReached(first.progress, faster.progress, DAY_ONE_NOON - DAY_MS)).toEqual(['first 70 wpm test'])
+    expect(milestonesReached(faster.progress, again.progress, DAY_ONE_NOON - DAY_MS)).toEqual([])
+    // Ended early: no speed milestone, but the day counts for the streak.
+    expect(milestonesReached(again.progress, third.progress, DAY_ONE_NOON)).toEqual(['3-day streak'])
+  })
+
+  test('the result toast: a new best and the milestones in one, or none', async () => {
+    const round = finished({ wpm: 61 })
+    const summary = recordResult(EMPTY_PROGRESS, round, DAY_ONE_NOON).summary
+    const newBest = { ...summary, pb: { kind: 'new', previousWpm: 58 } } as const
+
+    expect(resultToast(round, newBest, ['first 60 wpm test'])).toBe('✦ new personal best: 61 wpm ⋅ time 30 ⋅ first 60 wpm test')
+    expect(resultToast(round, summary, ['7-day streak'])).toBe('✦ 7-day streak')
+    expect(resultToast(round, summary, [])).toBeUndefined()
   })
 
   test('the daily goal from /config: minutes, or off', async () => {
