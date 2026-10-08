@@ -51,44 +51,34 @@ const MINUTE_MS = 60_000
 /** A one-day run is no streak worth a word. */
 const MIN_STREAK_SHOWN = 2
 
-/** `2/5 min today ⋅ 4-day streak`, or `keep your 4-day streak` before today's first test; met: `✓ daily goal met (5 min)`. */
-const dailyGoalRow = ({ Box, Text }: BandElements, { practice, goalMinutes }: DailyGoal, palette: Palette) => {
+/** `2/5 min today ⋅ 4-day streak`, or `keep your 4-day streak` before today's first test; met: `daily goal met (5 min)`. */
+const dailyGoalText = ({ practice, goalMinutes }: DailyGoal): string | undefined => {
   const minutes = Math.floor(practice.activeMs / MINUTE_MS)
-  const isMet = goalMinutes !== undefined && minutes >= goalMinutes
-  const goal = goalMinutes === undefined ? [] : [isMet ? `daily goal met (${goalMinutes} min)` : `${minutes}/${goalMinutes} min today`]
+  const goal =
+    goalMinutes === undefined ? [] : [minutes >= goalMinutes ? `daily goal met (${goalMinutes} min)` : `${minutes}/${goalMinutes} min today`]
   const streak = practice.streakDays < MIN_STREAK_SHOWN ? [] : [`${practice.isPlayedToday ? '' : 'keep your '}${practice.streakDays}-day streak`]
   const parts = [...goal, ...streak]
 
-  if (parts.length === 0) {
-    return undefined
-  }
-
-  return (
-    <Box flexDirection="row" columnGap={1}>
-      {isMet && <Text color={palette.success}>✓</Text>}
-      <Text dimColor>{parts.join(' ⋅ ')}</Text>
-    </Box>
-  )
+  return parts.length === 0 ? undefined : parts.join(' ⋅ ')
 }
 
 /**
  * The invitation while Claude works, with today's goal and streak; or a test in progress waiting
  * while the pane is closed, its progress alone.
  */
-export const invitationBand = (elements: BandElements, round: ActiveRound, palette: Palette, daily: DailyGoal | undefined, onOpen: () => void) => {
+export const invitationBand = (elements: BandElements, round: ActiveRound, daily: DailyGoal | undefined, onOpen: () => void) => {
   if (round.phase === 'running') {
     return pressOne(elements, 'play', `continue ⋅ ${progressLabel(round)}`, onOpen)
   }
   // No mode label: the mode shows in the pane.
   const invitation = pressOne(elements, 'play', 'type while you wait', onOpen)
-  const goalRow = daily === undefined ? undefined : dailyGoalRow(elements, daily, palette)
+  const goalText = daily === undefined ? undefined : dailyGoalText(daily)
+  const { Box, Text } = elements
 
-  const { Box } = elements
-
-  return goalRow === undefined ? invitation : (
+  return goalText === undefined ? invitation : (
     <Box flexDirection="row" columnGap={3}>
       {invitation}
-      {goalRow}
+      <Text dimColor>{goalText}</Text>
     </Box>
   )
 }

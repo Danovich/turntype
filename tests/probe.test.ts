@@ -532,12 +532,11 @@ describe('probe: turns, close and reopen', () => {
     expect(await invitationTexts($, clock)).toContain('0/5 min today ⋅ keep your 2-day streak')
   })
 
-  test('the goal met: a check and the goal; played today, the streak counts today', async ($, on) => {
+  test('the goal met: says so with the goal; played today, the streak counts today', async ($, on) => {
     const clock = mock.clock(on)
     stubWorld(on, { daily: { ...TWO_DAYS_PLAYED.daily, [daysAgo(0)]: { tests: 3, activeMs: 330_000 } } })
     const texts = await invitationTexts($, clock)
 
-    expect(texts).toContain('✓')
     expect(texts).toContain('daily goal met (5 min) ⋅ 3-day streak')
   })
 

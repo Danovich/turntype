@@ -651,7 +651,7 @@ export const register: Register = (on, options) => {
     const standing = round.phase === 'ready' ? await read($, dayStandingAtom) : null
     const daily = standing === null ? undefined : { practice: todayPractice(standing, Date.now()), goalMinutes: dailyGoalMinutes }
 
-    return invitationBand(elements, round, palette, daily, openFromBand)
+    return invitationBand(elements, round, daily, openFromBand)
   })
 
   // The game pane: nine rows in every phase. Words, the field and live stats, then the toolbar
