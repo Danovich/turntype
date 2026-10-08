@@ -60,20 +60,74 @@ const wordLetters = (targetWord: string, typedWord: string, place: WordPlace): L
 }
 
 /** Local accumulation keeps this O(n) per line; the result is never mutated after return. */
-const mergeRuns = (letters: readonly LetterRun[]): VisibleLine => {
+const mergeRuns = (pieces: readonly LetterRun[]): VisibleLine => {
   const runs: LetterRun[] = []
+  let text = ''
+  let first: LetterRun | undefined
 
-  for (const letter of letters) {
-    const lastRun = runs.at(-1)
-
-    if (lastRun !== undefined && lastRun.style === letter.style && lastRun.isInErrorWord === letter.isInErrorWord) {
-      runs[runs.length - 1] = { ...lastRun, text: lastRun.text + letter.text }
+  for (const piece of pieces) {
+    if (first !== undefined && first.style === piece.style && first.isInErrorWord === piece.isInErrorWord) {
+      text += piece.text
     } else {
-      runs.push(letter)
+      if (first !== undefined) {
+        runs.push({ text, style: first.style, isInErrorWord: first.isInErrorWord })
+      }
+      first = piece
+      text = piece.text
     }
+  }
+  if (first !== undefined) {
+    runs.push({ text, style: first.style, isInErrorWord: first.isInErrorWord })
   }
 
   return runs
+}
+
+/**
+ * Where the lines start when the words wrap to `width` (indexes into `targetWords`), and the line
+ * that holds word `wordIndex`. A word goes on a line while it fits with its space. Stops once
+ * `linesAfter` lines past that one have started, so the words further ahead are never looked at.
+ */
+const wrapLines = (
+  targetWords: readonly string[],
+  width: number,
+  wordIndex: number,
+  linesAfter: number,
+): { readonly lineStarts: readonly number[]; readonly wordLine: number } => {
+  const lineStarts: number[] = [0]
+  let lineWidth = 0
+  let wordLine = 0
+
+  for (const [index, targetWord] of targetWords.entries()) {
+    const wordWidth = targetWord.length + 1
+
+    if (lineWidth > 0 && lineWidth + wordWidth > width) {
+      if (index > wordIndex && lineStarts.length - 1 - wordLine >= linesAfter) {
+        // The line after the last one needed starts here: its start ends that line.
+        lineStarts.push(index)
+        break
+      }
+      lineStarts.push(index)
+      lineWidth = 0
+    }
+    lineWidth += wordWidth
+    if (index === wordIndex) {
+      wordLine = lineStarts.length - 1
+    }
+  }
+
+  return { lineStarts, wordLine }
+}
+
+/**
+ * The first word drawn when the words wrap to `width` with word `wordIndex` current: the start of
+ * the line above the current word's, the line just typed. Words before it are never drawn again,
+ * and cutting the text there leaves every line on show as it was.
+ */
+export const firstDrawnWord = (targetWords: readonly string[], width: number, wordIndex: number): number => {
+  const { lineStarts, wordLine } = wrapLines(targetWords, width, wordIndex, 0)
+
+  return lineStarts[Math.max(0, wordLine - 1)] ?? 0
 }
 
 /**
@@ -90,23 +144,7 @@ export const buildVisibleLines = (
 ): readonly VisibleLine[] => {
   const currentIndex = committedWords.length
   const placeOf = (index: number): WordPlace => (index < currentIndex ? 'committed' : index === currentIndex ? 'current' : 'ahead')
-
-  const lineStarts: number[] = [0]
-  let lineWidth = 0
-  let currentLine = 0
-
-  targetWords.forEach((targetWord, index) => {
-    const wordWidth = targetWord.length + 1
-
-    if (lineWidth > 0 && lineWidth + wordWidth > width) {
-      lineStarts.push(index)
-      lineWidth = 0
-    }
-    lineWidth += wordWidth
-    if (index === currentIndex) {
-      currentLine = lineStarts.length - 1
-    }
-  })
+  const { lineStarts, wordLine: currentLine } = wrapLines(targetWords, width, currentIndex, lineCount)
 
   const firstLine = Math.max(0, currentLine - 1)
   const lines = lineStarts.slice(firstLine, firstLine + lineCount).map((startIndex, offset) => {
@@ -117,7 +155,9 @@ export const buildVisibleLines = (
       const typedWord = place === 'committed' ? (committedWords[index] ?? '') : place === 'current' ? currentWord : ''
       // A typed-out (or too long) current word: the next key is the space, so the caret sits on it.
       const isCaretOnSpace = place === 'current' && currentWord.length >= targetWord.length
-      const letters = wordLetters(targetWord, typedWord, place)
+      // A word of one look (ahead, or committed exactly right) is one run; the rest letter by letter.
+      const uniform = place === 'ahead' ? LETTER_STYLE.untyped : place === 'committed' && typedWord === targetWord ? LETTER_STYLE.correct : undefined
+      const letters = uniform === undefined ? wordLetters(targetWord, typedWord, place) : [{ text: targetWord, style: uniform, isInErrorWord: false }]
       // A space looks the same in any style but the caret's, so it takes its word's last letter's: a
       // run of words that look alike is then one run, one Text. Never underlined, so it ends an error word's run.
       const lastStyle = letters.at(-1)?.style ?? LETTER_STYLE.untyped

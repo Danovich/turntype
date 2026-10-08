@@ -321,11 +321,13 @@ const replaceRound = (dollar: Dollar, change: (round: TypingRound | null) => Typ
   replaceGame(dollar, game => gameWith(game, change(game?.round ?? null)))
 
 /** One change of a field, as it was drawn. Date.now() here, not $.clock.now(): one host call less on every key. */
-const handleInput = (dollar: Dollar, drawn: FieldAsDrawn, fieldText: string): void => {
+const handleInput = (dollar: Dollar, drawn: FieldAsDrawn, fieldText: string, lineWidth: number): void => {
   const now = Date.now()
 
   void replaceGame(dollar, game =>
-    game !== null && isActive(game.round) ? applyFieldInput(game, drawn, fieldText, now, wordListFor(game.round.wordList).words) : game,
+    game !== null && isActive(game.round)
+      ? applyFieldInput(game, drawn, fieldText, now, { words: wordListFor(game.round.wordList).words, lineWidth })
+      : game,
   )
 }
 
@@ -705,7 +707,7 @@ export const register: Register = (on, options) => {
         picker: round.phase === 'ready' ? await pickerProps($) : undefined,
       },
       {
-        onInput: (drawn, text) => handleInput($, drawn, text),
+        onInput: (drawn, text, lineWidth) => handleInput($, drawn, text, lineWidth),
         onFinish: roundId => handleFinish($, roundId),
         picker: pickerActions($),
       },

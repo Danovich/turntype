@@ -64,7 +64,8 @@ export type GameViewProps = {
 }
 
 export type GameActions = {
-  readonly onInput: (field: FieldAsDrawn, text: string) => void
+  /** A change of the field drawn as `field`, with the width the words were drawn at. */
+  readonly onInput: (field: FieldAsDrawn, text: string, lineWidth: number) => void
   readonly onFinish: (roundId: number) => void
   readonly picker: PickerActions
 }
@@ -157,7 +158,7 @@ export const gameView = (elements: GameElements, round: ActiveRound, field: Typi
           value={field.value === '' ? undefined : field.value}
           submitLabel={SUBMIT_LABEL}
           autoFocus
-          onInput={text => actions.onInput(drawn, text)}
+          onInput={text => actions.onInput(drawn, text, props.bodyColumns)}
           onSubmit={() => actions.onFinish(round.roundId)}
         />
         {liveStatus({ Box, Text }, round, props.now, props.palette)}

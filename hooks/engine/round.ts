@@ -203,18 +203,26 @@ export type TypedChange = {
 }
 
 /**
+ * What a change needs beside the text: the round's word list (for the words added ahead in an
+ * endless test) and the width the pane draws the words at (where the words no longer drawn end).
+ */
+export type TypingContext = {
+  readonly words: readonly string[]
+  readonly lineWidth: number
+}
+
+/**
  * Applies a change of the typed text from committed word `fromWord` (in the window) on: `text` is
  * what the player has there now. Only that part is looked at, which is the current word alone but
  * after a late field. Undefined when the change is not taken: it would take back a committed word.
  * Deletions and edits count no keystroke, but they are activity: they end an idle gap.
- * `words`: the round's word list, for the words added ahead in an endless test.
  */
 export const applyTyped = (
   round: TypingRoundReady | TypingRoundRunning,
   fromWord: number,
   text: string,
   now: number,
-  words: readonly string[] = FALLBACK_WORD_LIST.words,
+  { words, lineWidth }: TypingContext,
 ): TypedChange | undefined => {
   const previousWords = round.phase === 'running' ? round.typedWords : []
   const previousCurrent = round.phase === 'running' ? round.currentWord : ''
@@ -293,5 +301,5 @@ export const applyTyped = (
   }
 
   // A committed word is final: the time to drop the oldest words once there are enough.
-  return { round: tally.didCommit ? trimWindow(sampled) : sampled, held: tail }
+  return { round: tally.didCommit ? trimWindow(sampled, lineWidth) : sampled, held: tail }
 }

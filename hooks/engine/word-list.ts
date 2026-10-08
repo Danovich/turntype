@@ -65,6 +65,20 @@ const randomFrom = (words: readonly string[]): string => words[Math.floor(Math.r
 export const wordsWithBigrams = (words: readonly string[], bigrams: readonly string[]): readonly string[] =>
   bigrams.length === 0 ? [] : words.filter(word => bigrams.some(bigram => word.includes(bigram)))
 
+// The practice words of the last list and letter pairs picked with: words are added ahead 20 at a
+// time, and the list and the pairs stay the same for a whole test, so the list is scanned once.
+let practiceCache: { readonly words: readonly string[]; readonly bigrams: string; readonly practice: readonly string[] } | undefined
+
+/** `wordsWithBigrams`, scanned once per list and pairs: the same answer, from a cache of one. */
+const practiceWordsOf = (words: readonly string[], bigrams: readonly string[]): readonly string[] => {
+  const key = bigrams.join(' ')
+  if (practiceCache?.words !== words || practiceCache.bigrams !== key) {
+    practiceCache = { words, bigrams: key, practice: wordsWithBigrams(words, bigrams) }
+  }
+
+  return practiceCache.practice
+}
+
 /**
  * Picks `count` random words from `words`, never the same word twice in a row. With
  * `focusBigrams`, about a third of them hold one of those pairs: practice for the player's weak keys.
@@ -76,7 +90,7 @@ export const pickWords = (
   focusBigrams: readonly string[] = [],
 ): readonly string[] => {
   const source = words.length >= 2 ? words : FALLBACK_WORD_LIST.words
-  const practiceWords = wordsWithBigrams(source, focusBigrams)
+  const practiceWords = practiceWordsOf(source, focusBigrams)
   const picked: string[] = []
 
   while (picked.length < count) {

@@ -1,6 +1,7 @@
 import type { TypingField, TypingGame, TypingRound } from '../../types'
 
 import { applyTyped } from './round'
+import type { TypingContext } from './round'
 import { textFromWord } from './typed-text'
 import { droppedWords } from './window'
 
@@ -47,7 +48,7 @@ const freshField = (field: TypingField, round: TypingRound): TypingField => {
  * holds the keys typed before the redraw. After a committed word the next field starts empty at
  * the end of the text; where the round left keys out, a fresh field holds what it took.
  */
-export const applyFieldInput = (game: TypingGame, drawn: FieldAsDrawn, fieldText: string, now: number, words?: readonly string[]): TypingGame => {
+export const applyFieldInput = (game: TypingGame, drawn: FieldAsDrawn, fieldText: string, now: number, context: TypingContext): TypingGame => {
   const { round, field } = game
 
   if (round.phase === 'finished' || drawn.roundId !== round.roundId) {
@@ -66,7 +67,7 @@ export const applyFieldInput = (game: TypingGame, drawn: FieldAsDrawn, fieldText
     return game
   }
   const fieldTyped = previousTail.slice(0, basePartial) + fieldText
-  const change = applyTyped(round, fromWord, fieldTyped, now, words)
+  const change = applyTyped(round, fromWord, fieldTyped, now, context)
 
   if (change === undefined) {
     return game

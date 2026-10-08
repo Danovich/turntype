@@ -37,13 +37,16 @@ const ENGLISH_SAMPLE = [...FALLBACK_WORD_LIST.words, 'quick', 'black']
 /** The first field of a round, as drawn before the first key. */
 const FIRST_FIELD = drawnOf(firstField(READY))
 
+/** The width the words are drawn at in these tests, as a pane of 100 columns draws them. */
+const LINE_WIDTH = 100
+
 /** A round with its field beside it, so a test reads both off one value. */
 type Played = TypingRound & { readonly field: TypingField }
 
 /** One change of a field, applied to a round and its field together as the shell does; a round without one has its first field. */
 const play = (played: TypingRound & { readonly field?: TypingField }, drawn: FieldAsDrawn, text: string, now: number, words?: readonly string[]): Played => {
   const { field = firstField(played), ...round } = played
-  const game = applyFieldInput({ round: round as TypingRound, field }, drawn, text, now, words)
+  const game = applyFieldInput({ round: round as TypingRound, field }, drawn, text, now, { words: words ?? FALLBACK_WORD_LIST.words, lineWidth: LINE_WIDTH })
 
   return { ...game.round, field: game.field }
 }
@@ -696,22 +699,11 @@ describe('window', () => {
       scored: addScoredWords(EMPTY_SCORED, typedWords, ready.targetWords),
     }
   }
-  // The same over LONG_WORDS: typing drops by itself (see "long flow").
-  const holding = (text: string): TypingRoundRunning => {
-    const { typedWords, currentWord } = wordsOf(text)
-
-    return {
-      ...asRunning(typeEvenly(READY_LONG, 'alpha ', 0, 10)),
-      typedWords,
-      currentWord,
-      scored: addScoredWords(EMPTY_SCORED, typedWords, LONG_WORDS),
-    }
-  }
 
   test('each committed word is scored once as it is typed: the totals are the whole text scored at once', async () => {
     const typed = asRunning(typeEvenly(READY_LONG, typedText(300), 0, 100))
-    // As typed: a mistyped "xalpha" is "xalph", the key past the word's end left out. 300 words stay in the window.
-    const whole = typed.typedWords
+    // As typed: a mistyped "xalpha" is "xalph", the key past the word's end left out.
+    const whole = wordsOf(typedText(300)).typedWords.map((word, index) => word.slice(0, LONG_WORDS[index]?.length))
     const sum = (pick: (score: ReturnType<typeof scoreWord>) => number) =>
       whole.reduce((total, word, index) => total + pick(scoreWord(word, LONG_WORDS[index] ?? '', true)), 0)
 
@@ -725,22 +717,20 @@ describe('window', () => {
     expect(typed.scored.correctWordCharacters).toBe(sum(score => score.correctWordCharacters))
   })
 
-  test('up to 5000 characters of committed text the round is returned as it is', async () => {
-    const running = holding(typedText(900))
+  test('while the current word is on the first or second line, nothing leaves the window', async () => {
+    // Width 40: "alpha be cat dog " is 17 wide, so two rounds of the four words fill a line.
+    const running = holdingOf(READY_LONG, typedText(10))
 
-    expect(typedOf(running).length).toBeLessThanOrEqual(5000)
-    expect(trimWindow(running)).toBe(running)
+    expect(trimWindow(running, 40)).toBe(running)
   })
 
-  test('past 5000 characters whole words leave the window, 2500 or more stay, and the totals stay as they were', async () => {
-    const running = holding(typedText(1300))
-    const trimmed = trimWindow(running)
+  test('the words before the line just typed leave; the totals stay; their letter pairs count as attempts', async () => {
+    const running = holdingOf(READY_LONG, typedText(1300))
+    const trimmed = trimWindow(running, 40)
     const dropped = droppedWords(trimmed)
 
-    expect(typedOf(running).length).toBeGreaterThan(5000)
-    expect(typedOf(trimmed).length).toBeGreaterThanOrEqual(2500)
-    // At most one more word could have gone: "xalpha " is the longest.
-    expect(typedOf(trimmed).length).toBeLessThan(2500 + 'xalpha '.length)
+    // What stays: the line just typed and the current one, under two lines of 40.
+    expect(typedOf(trimmed).length).toBeLessThan(80)
     expect(trimmed.targetWords[0]).toBe(LONG_WORDS[dropped])
     expect(trimmed.typedWords).toEqual(running.typedWords.slice(dropped))
     expect(trimmed.scored).toBe(running.scored)
@@ -748,6 +738,28 @@ describe('window', () => {
     const droppedTargets = LONG_WORDS.slice(0, dropped)
     expect(trimmed.droppedBigramAttempts).toMatchObject({ al: countOf(droppedTargets, 'alpha'), be: countOf(droppedTargets, 'be') })
   })
+
+  for (const width of [40, 100, 200, 300]) {
+    test(`width ${width}: the lines on show are the same before and after old words leave`, async () => {
+      // Words of every length in a pseudo-random order, as a list gives them, a few mistyped.
+      const sizes = ['a', 'be', 'cat', 'dogs', 'alpha', 'tables', 'question', 'understand']
+      let seed = width
+      const next = () => {
+        seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0
+
+        return seed >>> 16
+      }
+      const words = Array.from({ length: 1500 }, () => sizes[next() % sizes.length] ?? 'a')
+      const ready: TypingRoundReady = { ...READY, targetWords: words }
+      const typed = words.slice(0, 1400).map((word, index) => (index % 9 === 4 ? `${word.slice(0, -1)}x` : word)).join(' ') + ' '
+      const running = holdingOf(ready, typed)
+      const trimmed = trimWindow(running, width)
+      const lines = (round: TypingRoundRunning) => buildVisibleLines(round.targetWords, round.typedWords, round.currentWord, width, 3)
+
+      expect(droppedWords(trimmed)).toBeGreaterThan(0)
+      expect(lines(trimmed)).toEqual(lines(running))
+    })
+  }
 
   test('per-second samples as totals: a later second finishes the ones before it, those with no key as 0', async () => {
     // Keys in seconds 0, 0, 1, then 4: seconds 2 and 3 had none.
@@ -819,13 +831,18 @@ describe('long flow', () => {
   })
 
   test('a key from the field drawn before a drop lands after it, its base moved by the words dropped', async () => {
-    // The first word whose space takes the committed text past 5000 characters.
-    const crossing = Array.from({ length: 2000 }, (_, count) => count).find(count => typedText(count + 1).length > 5000) ?? 0
-    const before = asRunning(typeEvenly(READY_LONG, `${typedText(crossing)}${typedWord(crossing)}`, 0, 100))
-    expect(droppedWords(before)).toBe(0)
-    // That space commits the word and drops the oldest; the old field's next key arrives late.
+    // A word typed to its last letter whose space ends a line, so words drop: the first such after word 50.
+    const typedUpTo = (count: number) => asRunning(typeEvenly(READY_LONG, `${typedText(count)}${typedWord(count)}`, 0, 100))
+    const crossing =
+      Array.from({ length: 100 }, (_, offset) => 50 + offset).find(count => {
+        const ready = typedUpTo(count)
+
+        return droppedWords(asRunning(play(ready, drawnOf(ready.field), `${typedWord(count)} `, 600_000))) > droppedWords(ready)
+      }) ?? 0
+    const before = typedUpTo(crossing)
+    // That space commits the word and drops the line no longer drawn; the old field's next key arrives late.
     const afterDrop = asRunning(play(before, drawnOf(before.field), `${typedWord(crossing)} `, 600_000))
-    expect(droppedWords(afterDrop)).toBeGreaterThan(0)
+    expect(droppedWords(afterDrop)).toBeGreaterThan(droppedWords(before))
 
     const nextLetter = LONG_WORDS[crossing + 1]?.[0] ?? 'a'
     const late = asRunning(

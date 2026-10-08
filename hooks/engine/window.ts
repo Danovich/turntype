@@ -1,20 +1,13 @@
 import type { TypingRound, TypingRoundRunning } from '../../types'
 
+import { firstDrawnWord } from './layout'
 import { addBigramAttempts } from './stats'
 
-/**
+/*
  * The window: a flow test lasts as long as the turn, and a session can last days. Each committed
- * word is scored once into `scored`, so the words kept are for drawing alone: past this many
- * characters of committed text the oldest ones leave the round.
+ * word is scored once into `scored`, so the words kept are for drawing alone, and the words the
+ * pane no longer draws leave the round: everything before the line above the current word's.
  */
-const DROP_AT_CHARACTERS = 5000
-/**
- * Committed text kept after a drop. The word wrap starts at the window's first word, so after a
- * drop its line breaks can differ for a line or two before they match again: this keeps about 12
- * lines above the screen at 200 columns (more when narrower), so that happens out of sight.
- * Counted in characters, not words, because a line is a number of columns, whatever the words.
- */
-const KEEP_CHARACTERS = 2500
 
 /** Committed words that left the window: counted in `scored`, no longer in `typedWords`. None before the first key. */
 export const droppedWords = (round: TypingRound): number => (round.phase === 'ready' ? 0 : round.scored.words - round.typedWords.length)
@@ -22,32 +15,14 @@ export const droppedWords = (round: TypingRound): number => (round.phase === 're
 /** Committed words of the whole test, dropped ones included. */
 export const committedWordCount = (round: TypingRoundRunning): number => round.scored.words
 
-/** Characters of the committed words, each with its space. O(words): once per committed word. */
-const committedLength = (typedWords: readonly string[]): number => typedWords.reduce((sum, word) => sum + word.length + 1, 0)
-
 /**
- * Drops the oldest committed words of a long round: they are scored already, and only their target
- * letter pairs are kept, as attempts. A committed word is final, so no field changes it again.
- * Once per committed word; the same round while the window is short.
+ * Drops the committed words the pane no longer draws, wrapped to `lineWidth` as the pane wraps them:
+ * those before the line just typed. They are scored already; only their target letter pairs are
+ * kept, as attempts. Cut at a line start, so every line on show stays as it was. Once per
+ * committed word, over the few lines kept; the same round until a line is done.
  */
-export const trimWindow = (round: TypingRoundRunning): TypingRoundRunning => {
-  const committed = committedLength(round.typedWords)
-  // The common case, after every word: one sum, nothing more.
-  if (committed <= DROP_AT_CHARACTERS) {
-    return round
-  }
-  // Whole words from the start, as long as at least KEEP_CHARACTERS of committed text stay.
-  const droppableLength = committed - KEEP_CHARACTERS
-  let droppedLength = 0
-  let dropCount = 0
-  while (dropCount < round.typedWords.length) {
-    const wordLength = (round.typedWords[dropCount] ?? '').length + 1
-    if (droppedLength + wordLength > droppableLength) {
-      break
-    }
-    droppedLength += wordLength
-    dropCount += 1
-  }
+export const trimWindow = (round: TypingRoundRunning, lineWidth: number): TypingRoundRunning => {
+  const dropCount = Math.min(firstDrawnWord(round.targetWords, lineWidth, round.typedWords.length), round.typedWords.length)
 
   return dropCount === 0
     ? round
