@@ -68,19 +68,6 @@ export type TypingRoundBase = {
   readonly count: number | undefined
   readonly targetWords: readonly string[]
   readonly isClaudeDone: boolean
-  /** Counts the input fields of this round; a new field (new key) starts empty after each word. */
-  readonly fieldIndex: number
-  /**
-   * Where the current field's own text starts: after this many of `typedWords` (window-relative), and
-   * this many characters into the next word. The partial count is 0 but after a late field's keys.
-   */
-  readonly fieldBaseWords: number
-  readonly fieldBasePartial: number
-  /**
-   * The text the current field is drawn holding: empty, or the current word without the keys
-   * typed past its end. Fixed for the field's life, so a redraw never resets it.
-   */
-  readonly fieldValue: string
   /** The weak letter pairs this round practices; empty when adaptive words are off. */
   readonly focusBigrams: readonly string[]
   /** The personal best of this test when the round was made: fixed for the round, so a key reads no other value. */
@@ -158,6 +145,28 @@ export type TypingRoundFinished = TypingRoundBase & {
 
 export type TypingRound = TypingRoundReady | TypingRoundRunning | TypingRoundFinished
 
+/**
+ * The input field the pane draws for a round: which one (a new index is a new key, so a new
+ * field), where its own text starts in the typed text, and what it is drawn holding. Kept apart
+ * from the round: it exists because the field is an Input, which keeps its own text.
+ */
+export type TypingField = {
+  readonly roundId: number
+  readonly index: number
+  /** Committed words of the whole test before the field's own text, dropped ones included. */
+  readonly baseWord: number
+  /** Characters into the next word where the field's text starts: 0 but after a late field's keys. */
+  readonly basePartial: number
+  /** The text the field is drawn holding: fixed for its life, so a redraw never resets it. */
+  readonly value: string
+}
+
+/** The round and its field, changed together by each key: one value, so a key never sees one without the other. */
+export type TypingGame = {
+  readonly round: TypingRound
+  readonly field: TypingField
+}
+
 /** One local day's practice as the store had it, and the streak before it: what the band's daily goal reads. */
 export type TypingDayStanding = {
   /** The local day, `YYYY-MM-DD`. */
@@ -173,7 +182,8 @@ declare module 'claude-code' {
     'turntype': {
       /** The picks made in the game, as saved in the store; null: none, the /config defaults are in use. */
       picks: TypingPicks | null
-      round: TypingRound | null
+      /** The round in play and its input field; null: none. */
+      game: TypingGame | null
       /** Bumped every second while a test runs, so the timer and live wpm redraw. */
       clockTick: number
       /** The game pane is open: the band steps back to nothing. */

@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import type { TypingMode, TypingSettings } from '../types'
+import type { TypingGame, TypingMode, TypingSettings } from '../types'
 import { DEFAULT_SETTINGS } from '../hooks/engine/settings'
 import type { WordList } from '../hooks/engine/word-list'
+import * as engineField from '../hooks/engine/field'
 import * as engineLayout from '../hooks/engine/layout'
 import * as engineRound from '../hooks/engine/round'
 import * as engineStats from '../hooks/engine/stats'
@@ -80,22 +81,27 @@ const legacy: Side<LegacyRound, LegacyField> = {
           },
 }
 
-type EngineRound = ReturnType<typeof engineRound.createRound> | ReturnType<typeof engineRound.applyFieldInput>
-
 /** The words the new engine draws: none before the first key. */
-const engineTyped = (round: EngineRound): readonly [readonly string[], string] =>
+const engineTyped = (round: TypingGame['round']): readonly [readonly string[], string] =>
   round.phase === 'ready' ? [[], ''] : [round.typedWords, round.currentWord]
 
-const engine: Side<EngineRound, engineRound.DrawnField> = {
-  create: (settings, weak, list) => engineRound.createRound(1, settings, weak, list),
-  withWords: (round, words) => ({ ...round, targetWords: words }),
-  field: round => ({ key: `f${round.fieldIndex}`, value: round.fieldValue, drawn: engineRound.drawnField(round) }),
-  input: (round, drawn, text, now, words) =>
-    round.phase === 'finished' ? round : engineRound.applyFieldInput(round, drawn, text, now, words),
-  finish: round => (round.phase === 'running' ? engineRound.finishByPlayer(round) : round),
-  expire: (round, now) => engineRound.expireRound(round, now),
-  claudeDone: round => (round.phase === 'running' ? { ...round, isClaudeDone: true } : round),
-  snapshot: (round, now) => {
+const engine: Side<TypingGame, engineField.FieldAsDrawn> = {
+  create: (settings, weak, list) => {
+    const round = engineRound.createRound(1, settings, weak, list)
+
+    return { round, field: engineField.firstField(round) }
+  },
+  withWords: (game, words) => ({ ...game, round: { ...game.round, targetWords: words } }),
+  field: ({ field }) => ({ key: engineField.fieldKey(field), value: field.value, drawn: engineField.drawnOf(field) }),
+  input: (game, drawn, text, now, words) => engineField.applyFieldInput(game, drawn, text, now, words),
+  finish: game => (game.round.phase === 'running' ? { ...game, round: engineRound.finishByPlayer(game.round) } : game),
+  expire: (game, now) => {
+    const round = engineRound.expireRound(game.round, now)
+
+    return round === game.round ? game : { ...game, round }
+  },
+  claudeDone: game => (game.round.phase === 'running' ? { ...game, round: { ...game.round, isClaudeDone: true } } : game),
+  snapshot: ({ round }, now) => {
     const lines = engineLayout.buildVisibleLines(round.targetWords, ...engineTyped(round), WIDTH, LINES)
 
     return round.phase === 'finished'

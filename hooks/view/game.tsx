@@ -1,11 +1,11 @@
 import type { Color, TextProps } from 'claude-code'
 
-import type { TypingRoundRunning } from '../../types'
+import type { TypingField, TypingRoundRunning } from '../../types'
 import { buildVisibleLines, LETTER_STYLE } from '../engine/layout'
 import type { LetterStyle } from '../engine/layout'
 import { MODES } from '../engine/modes'
-import { drawnField } from '../engine/round'
-import type { DrawnField } from '../engine/round'
+import { drawnOf, fieldKey } from '../engine/field'
+import type { FieldAsDrawn } from '../engine/field'
 import { liveWpm } from '../engine/stats'
 import { activeElapsedMs, isIdle, timeLimitMs } from '../engine/timing'
 import type { Palette } from './palette'
@@ -52,9 +52,6 @@ export type GameViewProps = {
   /** The toolbar, drawn before the first key; none once the test runs, so a key reads no settings. */
   readonly picker: PickerProps | undefined
 }
-
-/** Where a field drew its text from: its round, and the field as drawn (its index and base). */
-export type FieldAsDrawn = { readonly roundId: number; readonly field: DrawnField }
 
 export type GameActions = {
   readonly onInput: (field: FieldAsDrawn, text: string) => void
@@ -124,12 +121,11 @@ const liveStatus = ({ Box, Text }: Pick<GameElements, 'Box' | 'Text'>, round: Ac
  * and its place in the tree, and is drawn before every Button: the toolbar going at the first key
  * must not take the focus ring from it.
  */
-export const gameView = (elements: GameElements, round: ActiveRound, props: GameViewProps, actions: GameActions) => {
+export const gameView = (elements: GameElements, round: ActiveRound, field: TypingField, props: GameViewProps, actions: GameActions) => {
   const { Box, Button, Input, Text } = elements
   const [typedWords, currentWord] = round.phase === 'running' ? [round.typedWords, round.currentWord] : [[], '']
   const lines = buildVisibleLines(round.targetWords, typedWords, currentWord, props.bodyColumns, WORD_LINE_COUNT)
-  const { roundId, fieldIndex } = round
-  const field: FieldAsDrawn = { roundId, field: drawnField(round) }
+  const drawn = drawnOf(field)
   const letterProps = letterTextProps(props.palette)
 
   return (
@@ -143,16 +139,16 @@ export const gameView = (elements: GameElements, round: ActiveRound, props: Game
       </Box>
       <Box flexDirection="row" columnGap={2}>
         <Input
-          key={`r${roundId}-f${fieldIndex}`}
+          key={fieldKey(field)}
           // In the field, before its own `⏎ finish`: what to do now, then what Enter does. The
           // first key replaces it. Without the keys, the way back to them.
           placeholder={props.isFocused ? FOCUSED_PLACEHOLDER : UNFOCUSED_PLACEHOLDER}
           // Empty for a fresh field; the word as cut for one drawn after keys past its end.
-          value={round.fieldValue === '' ? undefined : round.fieldValue}
+          value={field.value === '' ? undefined : field.value}
           submitLabel={SUBMIT_LABEL}
           autoFocus
-          onInput={text => actions.onInput(field, text)}
-          onSubmit={() => actions.onFinish(roundId)}
+          onInput={text => actions.onInput(drawn, text)}
+          onSubmit={() => actions.onFinish(round.roundId)}
         />
         {liveStatus({ Box, Text }, round, props.now, props.palette)}
       </Box>

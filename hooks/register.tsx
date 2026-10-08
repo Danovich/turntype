@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PaneOpenArgs, Register, Timer, UiOpenResult } from 'claude-code'
 
-import type { TypingDayStanding, TypingPicks, TypingRound, TypingRoundFinished, TypingRoundReady, TypingSettings } from '../types'
-import { bandKind, isActive, keepsRound, readableRound, roundAfter } from './engine/lifecycle'
+import type { TypingDayStanding, TypingGame, TypingPicks, TypingRound, TypingRoundFinished, TypingRoundReady, TypingSettings } from '../types'
+import { bandKind, isActive, keepsRound, readableGame, roundAfter } from './engine/lifecycle'
 import type { RoundNeed } from './engine/lifecycle'
 import { DEFAULT_WORD_LIST } from './engine/modes'
 import {
@@ -20,14 +20,15 @@ import {
   weakBigrams,
 } from './engine/progress'
 import type { ProgressPart, StoredProgress } from './engine/progress'
-import { applyFieldInput, createRound, expireRound, finishByPlayer } from './engine/round'
+import { applyFieldInput, fieldKey, gameWith } from './engine/field'
+import type { FieldAsDrawn } from './engine/field'
+import { createRound, expireRound, finishByPlayer } from './engine/round'
 import { DEFAULT_SETTINGS, parseDailyGoalMinutes, parseSavedPicks, parseTypingSettings, PICKED_SETTINGS_KEY, picksOf, settingsInUse } from './engine/settings'
 import { isIdle, isTimeUp } from './engine/timing'
 import { FALLBACK_WORD_LIST, parseWordList } from './engine/word-list'
 import type { WordList } from './engine/word-list'
 import { backToTypingBand, invitationBand, resultBand } from './view/band'
 import { gameView } from './view/game'
-import type { FieldAsDrawn } from './view/game'
 import { paletteFor, THEME_PALETTE } from './view/palette'
 import type { Palette } from './view/palette'
 import type { OpenOptions, PickerActions, PickerProps } from './view/picker'
@@ -49,7 +50,8 @@ type Dollar = EngineInterface
 
 const NO_PICKS: TypingPicks | null = null
 const picksAtom = atom({ plugin: 'turntype', key: 'picks' } as const, NO_PICKS)
-const roundAtom = atom({ plugin: 'turntype', key: 'round' } as const, null)
+const NO_GAME: TypingGame | null = null
+const gameAtom = atom({ plugin: 'turntype', key: 'game' } as const, NO_GAME)
 const clockTickAtom = atom({ plugin: 'turntype', key: 'clockTick' } as const, 0)
 const isGameOpenAtom = atom({ plugin: 'turntype', key: 'isGameOpen' } as const, false)
 const isPaneFocusedAtom = atom({ plugin: 'turntype', key: 'isPaneFocused' } as const, true)
@@ -237,8 +239,8 @@ const recordProgress = async (dollar: Dollar, round: TypingRoundFinished): Promi
       bigrams: await savePart(dollar, 'bigrams', changes.bigrams),
     }
     await publishProgress(dollar, saved)
-    await update(dollar, roundAtom, current =>
-      current?.phase === 'finished' && current.roundId === round.roundId ? { ...current, progress: summary } : current,
+    await update(dollar, gameAtom, game =>
+      game?.round.phase === 'finished' && game.round.roundId === round.roundId ? { ...game, round: { ...game.round, progress: summary } } : game,
     )
     const toast = resultToast(round, summary, milestonesReached(before, after, now))
     if (toast !== undefined) {
@@ -250,8 +252,11 @@ const recordProgress = async (dollar: Dollar, round: TypingRoundFinished): Promi
 }
 
 // ─── Rounds ──────────────────────────────────────────────────────────────────────────────────
-// Every change of the round goes through `replaceRound`: the engine's reducers applied to the round
-// in state, the clock run while a test runs, a test saved the moment it finishes.
+// Every change of the round goes through `replaceGame`: the engine's reducers applied to the round
+// and its field in state, the clock run while a test runs, a test saved the moment it finishes.
+
+/** The round in play, if any. */
+const readRound = async (dollar: Dollar): Promise<TypingRound | null> => (await read(dollar, gameAtom))?.round ?? null
 
 const TICK_MS = 1000
 
@@ -270,7 +275,7 @@ const stopTicker = (): void => {
  */
 const handleTick = async (dollar: Dollar): Promise<void> => {
   const now = Date.now()
-  const round = await read(dollar, roundAtom)
+  const round = await readRound(dollar)
 
   if (round?.phase === 'running' && isTimeUp(round, now)) {
     await replaceRound(dollar, current => (current === null ? null : expireRound(current, now)))
@@ -296,13 +301,14 @@ const syncTicker = (dollar: Dollar, round: TypingRound | null): void => {
  * save follows the change to finished, seen inside the one update: a later update of a finished
  * round (its summary attached, a turn's end) never saves it again.
  */
-const replaceRound = async (dollar: Dollar, change: (round: TypingRound | null) => TypingRound | null): Promise<void> => {
+const replaceGame = async (dollar: Dollar, change: (game: TypingGame | null) => TypingGame | null): Promise<void> => {
   let wasFinished = false
-  const round = await update(dollar, roundAtom, current => {
-    wasFinished = current?.phase === 'finished'
+  const game = await update(dollar, gameAtom, current => {
+    wasFinished = current?.round.phase === 'finished'
 
     return change(current)
   })
+  const round = game?.round ?? null
   syncTicker(dollar, round)
 
   if (round?.phase === 'finished' && !wasFinished) {
@@ -310,14 +316,16 @@ const replaceRound = async (dollar: Dollar, change: (round: TypingRound | null) 
   }
 }
 
+/** A change of the round alone: its field stays while it is the same round, a new round starts with its first field. */
+const replaceRound = (dollar: Dollar, change: (round: TypingRound | null) => TypingRound | null): Promise<void> =>
+  replaceGame(dollar, game => gameWith(game, change(game?.round ?? null)))
+
 /** One change of a field, as it was drawn. Date.now() here, not $.clock.now(): one host call less on every key. */
-const handleInput = (dollar: Dollar, field: FieldAsDrawn, fieldText: string): void => {
+const handleInput = (dollar: Dollar, drawn: FieldAsDrawn, fieldText: string): void => {
   const now = Date.now()
 
-  void replaceRound(dollar, round =>
-    isActive(round) && round.roundId === field.roundId
-      ? applyFieldInput(round, field.field, fieldText, now, wordListFor(round.wordList).words)
-      : round,
+  void replaceGame(dollar, game =>
+    game !== null && isActive(game.round) ? applyFieldInput(game, drawn, fieldText, now, wordListFor(game.round.wordList).words) : game,
   )
 }
 
@@ -441,11 +449,11 @@ const closeGame = async (dollar: Dollar): Promise<void> => {
  * next thing to do is type. Refused (the pane does not hold the keys), the focus stays as it is.
  */
 const focusField = async (dollar: Dollar): Promise<void> => {
-  const round = await read(dollar, roundAtom)
+  const game = await read(dollar, gameAtom)
 
-  if (isActive(round)) {
+  if (game !== null && isActive(game.round)) {
     try {
-      await dollar.ui.focus({ requestId: GAME_PANE_ID, key: `r${round.roundId}-f${round.fieldIndex}` })
+      await dollar.ui.focus({ requestId: GAME_PANE_ID, key: fieldKey(game.field) })
     } catch {
       // No focus call (an old host): the pick still holds; Tab or a click reaches the field.
     }
@@ -466,10 +474,10 @@ const syncSession = async (dollar: Dollar): Promise<void> => {
   await update(dollar, isGameOpenAtom, () => pane !== undefined)
   await setPaneFocused(dollar, pane?.isFocused ?? true)
   // A reload keeps the round, but one made by a version with another round shape cannot be read.
-  await update(dollar, roundAtom, readableRound)
+  await update(dollar, gameAtom, readableGame)
 
   // A reload keeps the round; a reset leaves none, and an open pane would stay empty.
-  if (pane !== undefined && (await read(dollar, roundAtom)) === null) {
+  if (pane !== undefined && (await read(dollar, gameAtom)) === null) {
     await closeGame(dollar)
   }
 }
@@ -581,7 +589,7 @@ export const register: Register = (on, options) => {
     const result = await next(e)
 
     // A query (no dialog) is harmless here: the pane keeps the keys and the watch stops.
-    if (result.decision === 'ask' && isActive(await read($, roundAtom)) && (await findGamePane($))?.isFocused) {
+    if (result.decision === 'ask' && isActive(await readRound($)) && (await findGamePane($))?.isFocused) {
       refocusAfterAsk($)
     }
 
@@ -631,7 +639,7 @@ export const register: Register = (on, options) => {
     if (isGameOpen && (await read($, isPaneFocusedAtom))) {
       return next(e)
     }
-    const round = await read($, roundAtom)
+    const round = await readRound($)
     const kind = bandKind(round, isGameOpen)
 
     if (round === null || kind === 'none') {
@@ -657,12 +665,13 @@ export const register: Register = (on, options) => {
   // The game pane: nine rows in every phase. Words, the field and live stats, then the toolbar
   // before the first key; or the result card.
   on('ui.render', { component: 'Pane', requestId: GAME_PANE_ID }, async ($, e, next) => {
-    const round = await read($, roundAtom)
+    const game = await read($, gameAtom)
     const elements = $.ui.resolve(e)
 
-    if (round === null || !('Input' in elements)) {
+    if (game === null || !('Input' in elements)) {
       return next(e)
     }
+    const { round, field } = game
 
     if (round.phase === 'finished') {
       return resultCard(
@@ -686,6 +695,7 @@ export const register: Register = (on, options) => {
     return gameView(
       elements,
       round,
+      field,
       {
         bodyColumns: e.props.bodyColumns,
         isFocused: e.props.isFocused,
@@ -695,7 +705,7 @@ export const register: Register = (on, options) => {
         picker: round.phase === 'ready' ? await pickerProps($) : undefined,
       },
       {
-        onInput: (field, text) => handleInput($, field, text),
+        onInput: (drawn, text) => handleInput($, drawn, text),
         onFinish: roundId => handleFinish($, roundId),
         picker: pickerActions($),
       },

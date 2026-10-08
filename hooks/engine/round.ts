@@ -12,8 +12,8 @@ import { isEndless, MODES } from './modes'
 import { countOf } from './settings'
 import { addScoredWords, addToSecond, calculateResult, EMPTY_SCORED } from './stats'
 import { activeElapsedMs, isTimeUp, pausedPartOfGap } from './timing'
-import { parseTyped } from './typed-text'
-import { droppedWords, trimWindow } from './window'
+import { parseTyped, textFromWord } from './typed-text'
+import { trimWindow } from './window'
 import { FALLBACK_WORD_LIST, pickWords } from './word-list'
 import type { WordList } from './word-list'
 
@@ -24,7 +24,7 @@ export const ROUND_ENDING = {
 } as const satisfies Record<TypingRoundEnding, TypingRoundEnding>
 
 /** The version of the round's shape: raised whenever its fields change, so a round kept over a reload from another version is dropped. */
-export const ROUND_SHAPE = 4
+export const ROUND_SHAPE = 5
 
 const EMPTY_SAMPLES = { count: 0, sum: 0, sumOfSquares: 0 } as const
 const FIRST_SECOND = { index: 0, keystrokes: 0 } as const
@@ -59,10 +59,6 @@ export const createRound = (
     // An endless test starts with enough words to fill the rows; one that ends on its last word has its count.
     targetWords: pickWords(wordList.words, isEndless(settings.mode) ? INITIAL_ENDLESS_WORDS : (count ?? INITIAL_ENDLESS_WORDS), undefined, focusBigrams),
     isClaudeDone: false,
-    fieldIndex: 0,
-    fieldBaseWords: 0,
-    fieldBasePartial: 0,
-    fieldValue: '',
     focusBigrams,
     pbWpm: undefined,
     wordList: wordList.name,
@@ -143,10 +139,6 @@ export const finishRound = (round: TypingRoundRunning, ending: TypingRoundEnding
   count: round.count,
   targetWords: round.targetWords,
   isClaudeDone: round.isClaudeDone,
-  fieldIndex: round.fieldIndex,
-  fieldBaseWords: round.fieldBaseWords,
-  fieldBasePartial: round.fieldBasePartial,
-  fieldValue: round.fieldValue,
   focusBigrams: round.focusBigrams,
   pbWpm: round.pbWpm,
   wordList: round.wordList,
@@ -177,34 +169,6 @@ const isLastWordTyped = (round: TypingRoundRunning, tally: KeystrokeTally): bool
 }
 
 /**
- * The typed text from word `fromWord` on, as one string: each committed word with its space, then
- * the current word. O(words after it): the current word alone, but after a late field's keys.
- */
-const textFromWord = (typedWords: readonly string[], currentWord: string, fromWord: number): string =>
-  typedWords.slice(fromWord).map(word => `${word} `).join('') + currentWord
-
-type FieldPlace = Pick<TypingRoundBase, 'fieldIndex' | 'fieldBaseWords' | 'fieldBasePartial' | 'fieldValue'>
-
-/** Where the next field starts: unchanged, or a fresh field at the end of the text after a committed word. */
-const nextField = (
-  round: TypingRoundReady | TypingRoundRunning,
-  fieldIndex: number,
-  typedWords: readonly string[],
-  currentWord: string,
-  didCommit: boolean,
-): FieldPlace => {
-  // A late change from a field that was already replaced: the new field is still empty,
-  // so the text it held after its word (keys typed before the redraw) joins the base.
-  if (fieldIndex < round.fieldIndex) {
-    return { fieldIndex: round.fieldIndex, fieldBaseWords: typedWords.length, fieldBasePartial: currentWord.length, fieldValue: '' }
-  }
-
-  return didCommit
-    ? { fieldIndex: round.fieldIndex + 1, fieldBaseWords: typedWords.length, fieldBasePartial: currentWord.length, fieldValue: '' }
-    : { fieldIndex: round.fieldIndex, fieldBaseWords: round.fieldBaseWords, fieldBasePartial: round.fieldBasePartial, fieldValue: round.fieldValue }
-}
-
-/**
  * Typed text from a committed word on, with what is not typing left out: spaces before a word (only
  * one space ends a word) and letters past the current word's end (the next key after a typed-out
  * word is the space). `fromWord` says which target the text's first word is.
@@ -216,13 +180,6 @@ const cleanTypedText = (text: string, targetWords: readonly string[], fromWord: 
 
   return overflow > 0 ? spaced.slice(0, spaced.length - overflow) : spaced
 }
-
-/** A fresh field (a new key) holding the text after the field's base: the field drawn before shows keys left out. */
-const withFreshField = <R extends TypingRoundReady | TypingRoundRunning>(round: R, typedWords: readonly string[], currentWord: string): R => ({
-  ...round,
-  fieldIndex: round.fieldIndex + 1,
-  fieldValue: textFromWord(typedWords, currentWord, round.fieldBaseWords).slice(round.fieldBasePartial),
-})
 
 /** `committed` (the words from `fromWord` on) still holds every committed word from there, as typed. */
 const keepsCommittedWords = (typedWords: readonly string[], fromWord: number, committed: readonly string[]): boolean =>
@@ -238,73 +195,47 @@ const joinWords = (typedWords: readonly string[], fromWord: number, committed: r
 export const expireRound = (round: TypingRound, now: number): TypingRound =>
   round.phase === 'running' && isTimeUp(round, now) ? finishRound(round, ROUND_ENDING.timeUp) : round
 
-/**
- * An input field as the pane drew it: its index, where its own text started (after `baseWords`
- * committed words, `basePartial` characters into the next), and how many words the window had
- * dropped then. A field drawn before a drop counts its base from the old start, so the words dropped
- * since are taken off.
- */
-export type DrawnField = {
-  readonly fieldIndex: number
-  readonly baseWords: number
-  readonly basePartial: number
-  readonly droppedWords: number
+/** A change of the typed text as the round took it: the round after it, and the text it holds from `fromWord` on. */
+export type TypedChange = {
+  readonly round: TypingRound
+  /** `text` with the keys that are not typing left out: a field showing more holds keys the round did not take. */
+  readonly held: string
 }
 
-/** The round's current field, as the pane draws it now. */
-export const drawnField = (round: TypingRound): DrawnField => ({
-  fieldIndex: round.fieldIndex,
-  baseWords: round.fieldBaseWords,
-  basePartial: round.fieldBasePartial,
-  droppedWords: droppedWords(round),
-})
-
 /**
- * Applies one change of the input field `field`, whose text follows its base as the field was drawn.
- * Any field's base is a point in the typed text, a late field's too, so the base text is read from it;
- * only the text from the base's word on is looked at, which is the current word but after a late field.
+ * Applies a change of the typed text from committed word `fromWord` (in the window) on: `text` is
+ * what the player has there now. Only that part is looked at, which is the current word alone but
+ * after a late field. Undefined when the change is not taken: it would take back a committed word.
  * Deletions and edits count no keystroke, but they are activity: they end an idle gap.
  * `words`: the round's word list, for the words added ahead in an endless test.
  */
-export const applyFieldInput = (
+export const applyTyped = (
   round: TypingRoundReady | TypingRoundRunning,
-  field: DrawnField,
-  fieldText: string,
+  fromWord: number,
+  text: string,
   now: number,
   words: readonly string[] = FALLBACK_WORD_LIST.words,
-): TypingRound => {
-  const isLateField = field.fieldIndex < round.fieldIndex
+): TypedChange | undefined => {
   const previousWords = round.phase === 'running' ? round.typedWords : []
   const previousCurrent = round.phase === 'running' ? round.currentWord : ''
-  // The field's base in today's window, as a word and a number of characters from that word's start.
-  const shiftedBase = field.baseWords - (droppedWords(round) - field.droppedWords)
-  const fromWord = Math.min(Math.max(0, shiftedBase), previousWords.length)
   const previousTail = textFromWord(previousWords, previousCurrent, fromWord)
-  const basePartial = shiftedBase < 0 ? 0 : shiftedBase > previousWords.length ? previousTail.length : Math.min(field.basePartial, previousTail.length)
 
-  // A late change is only taken while the newer field is still empty.
-  if (isLateField && textFromWord(previousWords, previousCurrent, round.fieldBaseWords).length !== round.fieldBasePartial) {
-    return round
-  }
   // The time ran out while the player was away: the test ends without this key.
   if (round.phase === 'running' && isTimeUp(round, now)) {
-    return finishRound(round, ROUND_ENDING.timeUp)
+    return { round: finishRound(round, ROUND_ENDING.timeUp), held: previousTail }
   }
   // One rule for keys that are not typing (a space before a word, a letter past a word's end):
-  // they are left out of the text and the scores. Where that leaves the text as it was, the round
-  // stays; where the field shows them, a fresh field (a new key) holds the text without them.
-  const fieldTyped = previousTail.slice(0, basePartial) + fieldText
-  const tail = cleanTypedText(fieldTyped, round.targetWords, fromWord)
-  const fieldShowsTyped = tail === fieldTyped
+  // they are left out of the text and the scores.
+  const tail = cleanTypedText(text, round.targetWords, fromWord)
 
   if (tail === previousTail) {
-    return fieldShowsTyped ? round : withFreshField(round, previousWords, previousCurrent)
+    return { round, held: tail }
   }
 
   const parsedTail = parseTyped(tail)
   // A committed word is final: a late change that would take one back (its space deleted) is not taken.
   if (!keepsCommittedWords(previousWords, fromWord, parsedTail.committedWords)) {
-    return round
+    return undefined
   }
   const typedWords = joinWords(previousWords, fromWord, parsedTail.committedWords)
   const { currentWord } = parsedTail
@@ -326,7 +257,6 @@ export const applyFieldInput = (
     focusBigrams: round.focusBigrams,
     pbWpm: round.pbWpm,
     wordList: round.wordList,
-    ...nextField(round, field.fieldIndex, typedWords, currentWord, tally.didCommit),
     phase: 'running',
     targetWords: needsMoreWords
       ? [...round.targetWords, ...pickWords(words, LOOKAHEAD_WORDS, round.targetWords.at(-1), round.focusBigrams)]
@@ -359,13 +289,10 @@ export const applyFieldInput = (
   // The mode's own end: its last word, or Claude done and the word completed.
   const { endsWhen } = MODES[sampled.mode]
   if ((endsWhen === 'lastWord' && isLastWordTyped(sampled, tally)) || (endsWhen === 'claudeDone' && sampled.isClaudeDone && tally.didCommit)) {
-    return finishRound(sampled, ROUND_ENDING.complete)
+    return { round: finishRound(sampled, ROUND_ENDING.complete), held: tail }
   }
 
-  if (!fieldShowsTyped) {
-    return withFreshField(sampled, typedWords, currentWord)
-  }
-
-  // A committed word is final: the time to drop the oldest words once there are enough.
-  return tally.didCommit ? trimWindow(sampled) : sampled
+  // A committed word is final: the time to drop the oldest words once there are enough. A change
+  // with keys left out waits for the next word, as the field is replaced first.
+  return { round: tally.didCommit && tail === text ? trimWindow(sampled) : sampled, held: tail }
 }

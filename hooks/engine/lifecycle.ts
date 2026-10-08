@@ -1,4 +1,4 @@
-import type { TypingRound, TypingRoundReady, TypingRoundRunning } from '../../types'
+import type { TypingGame, TypingRound, TypingRoundReady, TypingRoundRunning } from '../../types'
 
 import { ROUND_SHAPE } from './round'
 
@@ -38,8 +38,8 @@ export const roundAfter = (round: TypingRound | null, event: RoundEvent): Typing
   }
 }
 
-/** A round kept in state over a reload stays only when this version can read it: the same shape. */
-export const readableRound = (round: TypingRound | null): TypingRound | null => (round?.shape === ROUND_SHAPE ? round : null)
+/** A game kept in state over a reload stays only when this version can read its round: the same shape. */
+export const readableGame = (game: TypingGame | null): TypingGame | null => (game?.round.shape === ROUND_SHAPE ? game : null)
 
 /**
  * Why the shell wants a round: the invitation after a turn's delay, new settings, the game opened,

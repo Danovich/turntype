@@ -22,26 +22,25 @@ export const droppedWords = (round: TypingRound): number => (round.phase === 're
 /** Committed words of the whole test, dropped ones included. */
 export const committedWordCount = (round: TypingRoundRunning): number => round.scored.words
 
-/** Characters of the first `wordCount` committed words, each with its space. O(words): once per committed word. */
-const committedLength = (typedWords: readonly string[], wordCount: number): number =>
-  typedWords.slice(0, wordCount).reduce((sum, word) => sum + word.length + 1, 0)
+/** Characters of the committed words, each with its space. O(words): once per committed word. */
+const committedLength = (typedWords: readonly string[]): number => typedWords.reduce((sum, word) => sum + word.length + 1, 0)
 
 /**
  * Drops the oldest committed words of a long round: they are scored already, and only their target
- * letter pairs are kept, as attempts. Only words wholly in the field's base: the field never changes
- * them again. Once per committed word; the same round while the window is short.
+ * letter pairs are kept, as attempts. A committed word is final, so no field changes it again.
+ * Once per committed word; the same round while the window is short.
  */
 export const trimWindow = (round: TypingRoundRunning): TypingRoundRunning => {
-  const baseLength = committedLength(round.typedWords, round.fieldBaseWords) + round.fieldBasePartial
+  const committed = committedLength(round.typedWords)
   // The common case, after every word: one sum, nothing more.
-  if (baseLength <= DROP_AT_CHARACTERS) {
+  if (committed <= DROP_AT_CHARACTERS) {
     return round
   }
   // Whole words from the start, as long as at least KEEP_CHARACTERS of committed text stay.
-  const droppableLength = baseLength - KEEP_CHARACTERS
+  const droppableLength = committed - KEEP_CHARACTERS
   let droppedLength = 0
   let dropCount = 0
-  while (dropCount < round.fieldBaseWords) {
+  while (dropCount < round.typedWords.length) {
     const wordLength = (round.typedWords[dropCount] ?? '').length + 1
     if (droppedLength + wordLength > droppableLength) {
       break
@@ -55,7 +54,6 @@ export const trimWindow = (round: TypingRoundRunning): TypingRoundRunning => {
     : {
         ...round,
         typedWords: round.typedWords.slice(dropCount),
-        fieldBaseWords: round.fieldBaseWords - dropCount,
         targetWords: round.targetWords.slice(dropCount),
         droppedBigramAttempts: addBigramAttempts(round.droppedBigramAttempts, round.targetWords.slice(0, dropCount)),
       }
