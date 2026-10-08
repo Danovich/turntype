@@ -267,7 +267,7 @@ const pressEnter = async (pane: PaneHandle): Promise<void> => {
 /** A turn long enough for the invitation, the game opened from the band: the usual way in. */
 const openFromBand = async ($: Engine, clock: ReturnType<typeof mock.clock>, surface: Surface = 'terminal') => {
   await $.turn.start({ text: 'go', turnId: 'turn-1' })
-  await clock.advance(1500)
+  await clock.advance(3000)
   const band = await $.ui.mount({ plugin: GAME, surface, component: 'AbovePrompt', props: BAND_PROPS })
   await band.press({ key: 'play' })
   const pane = await $.ui.mount({ plugin: GAME, surface, component: 'Pane', requestId: GAME, props: PANE_PROPS })
@@ -502,7 +502,7 @@ describe('probe: turns, close and reopen', () => {
 
     await $.turn.complete({ ...TURN_DONE, turnId: 'turn-1' })
     await $.turn.start({ text: 'next', turnId: 'turn-2' })
-    await clock.advance(1500)
+    await clock.advance(3000)
     expect(await band.find({ type: 'Button', key: 'play' })).toMatchObject({ props: { label: 'type while you wait' } })
   })
 
@@ -551,7 +551,7 @@ describe('probe: turns, close and reopen', () => {
     const clock = mock.clock(on)
     stubWorld(on)
     await $.turn.start({ text: 'go', turnId: 'turn-1' })
-    await clock.advance(1500)
+    await clock.advance(3000)
     const band = await $.ui.mount({ plugin: GAME, surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, hasSurvey: true } })
 
     expect(await band.find({ type: 'Button' })).toBeUndefined()
@@ -565,7 +565,7 @@ describe('probe: turns, close and reopen', () => {
     await $.turn.complete({ ...TURN_DONE, turnId: 'turn-1' })
 
     await $.turn.start({ text: 'next', turnId: 'turn-2' })
-    await clock.advance(1500)
+    await clock.advance(3000)
     expect(await fieldKey(pane)).toBe('r1-f1')
   })
 })
@@ -1048,7 +1048,7 @@ describe('probe: band text', () => {
     const clock = mock.clock(on)
     stubWorld(on)
     await $.turn.start({ text: 'go', turnId: 'turn-1' })
-    await clock.advance(1500)
+    await clock.advance(3000)
     const band = await $.ui.mount({ plugin: GAME, surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
 
     const drawn = [

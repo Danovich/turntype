@@ -2,7 +2,7 @@
 
 A typing test for the time while Claude works. A Claude Code mod.
 
-When a turn takes more than 1.5 seconds, a line shows above the prompt: `press 1: type while you wait`. Press `1` in an empty prompt (or run `/type`) to open the game. Type the words. Your result, personal best and daily total show when the test ends.
+When a turn takes more than 3 seconds, a line shows above the prompt: `press 1: type while you wait`. Press `1` in an empty prompt (or run `/type`) to open the game. Type the words. Your result, personal best and daily total show when the test ends.
 
 Tested with **Claude Code 2.1.292**. The mods API can change between releases.
 

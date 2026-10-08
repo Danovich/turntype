@@ -490,7 +490,7 @@ const pickerActions = (dollar: Dollar): PickerActions => ({
 // ─── Hooks ───────────────────────────────────────────────────────────────────────────────────
 
 /** A turn shorter than this never shows the invitation. */
-const APPEAR_AFTER_MS = 1500
+const APPEAR_AFTER_MS = 3000
 
 // The main agent's turn in progress, if any: an untouched round stays while it runs.
 let pendingTurnId: string | undefined

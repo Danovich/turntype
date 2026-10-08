@@ -82,7 +82,7 @@ describe('turntype', () => {
       const band = await $.ui.mount({ plugin: 'turntype', surface, component: 'AbovePrompt', props: BAND_PROPS })
       expect(await band.find({ type: 'Button', key: 'play' })).toBeUndefined()
 
-      await clock.advance(1500)
+      await clock.advance(3000)
       expect(await band.find({ type: 'Button', key: 'play' })).toMatchObject({ props: { hotkey: '1', plain: true } })
 
       await band.press({ key: 'play' })
@@ -141,7 +141,7 @@ describe('turntype', () => {
     stubEngine(on)
 
     await $.turn.start({ text: 'go', turnId: 'turn-1' })
-    await clock.advance(1500)
+    await clock.advance(3000)
     const band = await $.ui.mount({ plugin: 'turntype', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
     await band.press({ key: 'play' })
     const pane = await $.ui.mount({ plugin: 'turntype', surface: 'terminal', component: 'Pane', requestId: 'turntype', props: PANE_PROPS })
@@ -151,7 +151,7 @@ describe('turntype', () => {
     await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false, turnId: 'turn-1' })
 
     await $.turn.start({ text: 'again', turnId: 'turn-2' })
-    await clock.advance(1500)
+    await clock.advance(3000)
     expect(await band.find({ type: 'Button', key: 'play' })).toBeDefined()
     await pane.unmount()
     await band.unmount()
@@ -177,7 +177,7 @@ describe('turntype', () => {
     }))
 
     await $.turn.start({ text: 'go', turnId: 'turn-1' })
-    await clock.advance(1500)
+    await clock.advance(3000)
     const band = await $.ui.mount({ plugin: 'turntype', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
     await band.press({ key: 'play' })
     focus.focusRequests = 0
@@ -204,8 +204,8 @@ describe('turntype', () => {
     stubEngine(on)
 
     await $.turn.start({ text: 'hi', turnId: 'turn-1' })
-    await clock.advance(500)
-    await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 500, isAborted: false, turnId: 'turn-1' })
+    await clock.advance(2500)
+    await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 2500, isAborted: false, turnId: 'turn-1' })
     await clock.advance(2000)
     const band = await $.ui.mount({ plugin: 'turntype', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
     expect(await band.find({ type: 'Button' })).toBeUndefined()
@@ -218,7 +218,7 @@ describe('turntype', () => {
       stubEngine(on)
 
       await $.turn.start({ text: 'go', turnId: 'turn-1' })
-      await clock.advance(1500)
+      await clock.advance(3000)
       const band = await $.ui.mount({ plugin: 'turntype', surface, component: 'AbovePrompt', props: BAND_PROPS })
       await band.press({ key: 'play' })
       const pane = await $.ui.mount({ plugin: 'turntype', surface, component: 'Pane', requestId: 'turntype', props: PANE_PROPS })
