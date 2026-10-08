@@ -2,8 +2,7 @@ import type { TypingDayStanding, TypingPbOutcome, TypingProgressSummary, TypingR
 
 import { MODES } from './modes'
 import { ROUND_ENDING } from './round'
-import { mean } from './stats'
-import { addBigramAttempts } from './window'
+import { addBigramAttempts, mean } from './stats'
 
 /**
  * The saved progress, one `$.store` key per part. Every session on the machine shares the store and
@@ -171,20 +170,14 @@ const addToDaily = (daily: StoredProgress['daily'], today: string, durationMs: n
 
 const roundToHundredths = (value: number): number => Math.round(value * 100) / 100
 
-/** The target text the player reached in the window: committed words whole, the current one as far as typed. */
-const reachedText = (round: TypingRoundFinished): readonly string[] => {
-  const { typedWords: committedWords, currentWord } = round
-
-  return [
-    ...committedWords.map((_, index) => round.targetWords[index] ?? ''),
-    (round.targetWords[committedWords.length] ?? '').slice(0, currentWord.length),
-  ]
-}
+/** The part of the current word's target the player reached: its letters as far as typed. */
+const reachedInCurrentWord = (round: TypingRoundFinished): string =>
+  (round.targetWords[round.typedWords.length] ?? '').slice(0, round.currentWord.length)
 
 /** Weighs the old counts down and adds this test's; a pair that fades below one attempt is dropped. */
 const mergeBigrams = (bigrams: StoredProgress['bigrams'], round: TypingRoundFinished): StoredProgress['bigrams'] => {
-  // Every pair reached is one attempt: the window's, and the folded words' counted when folded.
-  const attempts = addBigramAttempts(round.fold.bigramAttempts, reachedText(round))
+  // Every pair reached is one attempt: the committed words' counted when committed, and the current word's so far.
+  const attempts = addBigramAttempts(round.scored.bigramAttempts, [reachedInCurrentWord(round)])
   const keys = new Set([...Object.keys(bigrams), ...Object.keys(attempts), ...Object.keys(round.bigramErrors)])
 
   return Object.fromEntries(

@@ -1,4 +1,4 @@
-import type { TypingCharCounts, TypingResult, TypingRoundEnding, TypingRoundRunning, TypingSampleTotals } from '../../types'
+import type { TypingCharCounts, TypingResult, TypingRoundEnding, TypingRoundRunning, TypingSampleTotals, TypingScored } from '../../types'
 
 import { timeLimitMs } from './timing'
 
@@ -73,12 +73,51 @@ export const scoreWord = (typedWord: string, targetWord: string, isCommitted: bo
   return { ...counts, correctWordCharacters }
 }
 
-/** Characters of the correctly committed words in the window, with their spaces. O(window): only after a deletion. */
-export const countCorrectWordCharacters = (typedWords: readonly string[], targetWords: readonly string[]): number =>
-  typedWords.reduce(
-    (sum, typedWord, index) => sum + (typedWord === targetWords[index] ? typedWord.length + 1 : 0),
-    0,
-  )
+/** The letter pairs of a word, in order: "the" is "th" and "he". */
+export const bigramsOf = (word: string): readonly string[] =>
+  Array.from({ length: Math.max(0, word.length - 1) }, (_, index) => word.slice(index, index + 2))
+
+/** Counts each pair of `words` once per time it occurs, added to `counts`. Local accumulation: O(pairs). */
+export const addBigramAttempts = (counts: Readonly<Record<string, number>>, words: readonly string[]): Readonly<Record<string, number>> => {
+  const added: Record<string, number> = { ...counts }
+
+  for (const bigram of words.flatMap(bigramsOf)) {
+    added[bigram] = (added[bigram] ?? 0) + 1
+  }
+
+  return added
+}
+
+const addCharCounts = (first: TypingCharCounts, second: TypingCharCounts): TypingCharCounts => ({
+  correct: first.correct + second.correct,
+  incorrect: first.incorrect + second.incorrect,
+  extra: first.extra + second.extra,
+  missed: first.missed + second.missed,
+})
+
+export const EMPTY_SCORED: TypingScored = {
+  words: 0,
+  chars: { correct: 0, incorrect: 0, extra: 0, missed: 0 },
+  correctWordCharacters: 0,
+  bigramAttempts: {},
+}
+
+/** Adds committed words to the totals, each scored against its target: once per word, when its space is typed. */
+export const addScoredWords = (scored: TypingScored, typedWords: readonly string[], targetWords: readonly string[]): TypingScored =>
+  typedWords.length === 0
+    ? scored
+    : {
+        words: scored.words + typedWords.length,
+        ...typedWords.reduce(
+          (total, typedWord, index) => {
+            const score = scoreWord(typedWord, targetWords[index] ?? '', true)
+
+            return { chars: addCharCounts(total.chars, score), correctWordCharacters: total.correctWordCharacters + score.correctWordCharacters }
+          },
+          { chars: scored.chars, correctWordCharacters: scored.correctWordCharacters },
+        ),
+        bigramAttempts: addBigramAttempts(scored.bigramAttempts, targetWords.slice(0, typedWords.length)),
+      }
 
 /**
  * The test time a result is measured over: exactly the limit of a time test that ran out,
@@ -89,37 +128,25 @@ const resultDurationMs = (round: TypingRoundRunning, ending: TypingRoundEnding):
     ? timeLimitMs(round)
     : Math.max(MIN_DURATION_MS, round.lastInputAt - round.startedAt - round.pausedMs)
 
-/** Live wpm from the running counter: O(1), so a key or a tick never scores the whole text. */
+/** Live wpm from the committed words' total: O(1), so a key or a tick never scores the whole text. */
 export const liveWpm = (round: TypingRoundRunning, activeMs: number): number =>
-  Math.round(wordsPerMinute(round.correctWordCharacters, Math.max(MIN_DURATION_MS, activeMs)))
+  Math.round(wordsPerMinute(round.scored.correctWordCharacters, Math.max(MIN_DURATION_MS, activeMs)))
 
-/** The result of the whole test: the window scored now, plus what the window folded away, scored when folded. */
+/** The result of the whole test: the committed words' totals, plus the word in progress scored now. */
 export const calculateResult = (round: TypingRoundRunning, ending: TypingRoundEnding): TypingResult => {
-  const { fold } = round
-  const { typedWords: committedWords, currentWord } = round
-  const committedScores = committedWords.map((typedWord, index) =>
-    scoreWord(typedWord, round.targetWords[index] ?? '', true),
-  )
-  const currentScore = scoreWord(currentWord, round.targetWords[committedWords.length] ?? '', false)
-  const scores = [...committedScores, currentScore]
-  const total = (pick: (score: WordScore) => number): number => scores.reduce((sum, score) => sum + pick(score), 0)
-
+  const { scored, currentWord } = round
+  const currentScore = scoreWord(currentWord, round.targetWords[round.typedWords.length] ?? '', false)
   const durationMs = resultDurationMs(round, ending)
   const keystrokes = round.correctKeystrokes + round.incorrectKeystrokes
 
   return {
-    wpm: Math.round(wordsPerMinute(fold.correctWordCharacters + total(score => score.correctWordCharacters), durationMs)),
+    wpm: Math.round(wordsPerMinute(scored.correctWordCharacters + currentScore.correctWordCharacters, durationMs)),
     raw: Math.round(wordsPerMinute(keystrokes, durationMs)),
     accuracy: keystrokes === 0 ? 0 : Math.round((round.correctKeystrokes / keystrokes) * 100),
     // Scaling every sample (to raw wpm) leaves the ratio of spread to mean as it is.
-    consistency: Math.round(consistencyOf(addSampleTotals(fold.samples, totalSamples(round.keystrokesPerSecond)))),
-    chars: {
-      correct: fold.chars.correct + total(score => score.correct),
-      incorrect: fold.chars.incorrect + total(score => score.incorrect),
-      extra: fold.chars.extra + total(score => score.extra),
-      missed: fold.chars.missed + total(score => score.missed),
-    },
+    consistency: Math.round(consistencyOf(addSampleTotals(round.foldedSamples, totalSamples(round.keystrokesPerSecond)))),
+    chars: addCharCounts(scored.chars, currentScore),
     durationMs,
-    wordCount: fold.words + committedWords.length + (currentWord === '' ? 0 : 1),
+    wordCount: scored.words + (currentWord === '' ? 0 : 1),
   }
 }

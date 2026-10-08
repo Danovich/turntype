@@ -43,20 +43,15 @@ export type TypingSampleTotals = {
 }
 
 /**
- * What the window folded away from the start of a long test, scored when it was folded, so a
- * result reads the same as if the text were still there. A flow test lasts as long as the turn,
- * and a session can last days: without the fold the round would grow without limit.
+ * The committed words of the whole test, each scored once when its space was typed: a committed
+ * word is final, so a result is these totals and the word in progress, however long the test.
  */
-export type TypingFold = {
-  /** Committed words removed from the start of `typedWords` and `targetWords`. */
+export type TypingScored = {
   readonly words: number
-  /** Characters of committed text removed (each word with its space): where the next fold starts counting. */
-  readonly droppedCharacters: number
   readonly chars: TypingCharCounts
-  /** The folded words' share of the word characters wpm is calculated from. */
+  /** Characters of the correctly committed words, with their spaces: what wpm is calculated from. */
   readonly correctWordCharacters: number
-  readonly samples: TypingSampleTotals
-  /** Letter pairs of the folded target words: one attempt each. */
+  /** Letter pairs of the committed target words: one attempt each. */
   readonly bigramAttempts: Readonly<Record<string, number>>
 }
 
@@ -107,16 +102,15 @@ export type TypingRoundRunning = TypingRoundBase & {
   readonly pausedMs: number
   readonly correctKeystrokes: number
   readonly incorrectKeystrokes: number
-  /** Characters of the correctly committed words, with their spaces: what live wpm reads. */
-  readonly correctWordCharacters: number
-  /** Counted keystrokes in each active second since the start, less the seconds folded into `fold.samples`. */
+  /** Counted keystrokes in each active second since the start, less the seconds folded into `foldedSamples`. */
   readonly keystrokesPerSecond: readonly number[]
   /** Wrong keys per expected letter pair ("th": an "h" after a "t" was missed), counted when pressed. */
   readonly bigramErrors: Readonly<Record<string, number>>
   /** One change of the field added more text than a person types at once: a paste, not typing. */
   readonly hasPastedText: boolean
-  /** The start of the test, folded out of `typedWords`, `targetWords` and `keystrokesPerSecond`. */
-  readonly fold: TypingFold
+  readonly scored: TypingScored
+  /** The oldest seconds of `keystrokesPerSecond`, folded into totals so a long test stays small. */
+  readonly foldedSamples: TypingSampleTotals
 }
 
 /** complete: the test reached its end. timeUp: a time test ran out. early: the player ended it first. */
@@ -151,7 +145,8 @@ export type TypingRoundFinished = TypingRoundBase & {
   readonly result: TypingResult
   readonly bigramErrors: Readonly<Record<string, number>>
   readonly hasPastedText: boolean
-  readonly fold: TypingFold
+  readonly scored: TypingScored
+  readonly foldedSamples: TypingSampleTotals
   /** Added once the result is saved; undefined until then, or when the store failed. */
   readonly progress: TypingProgressSummary | undefined
 }

@@ -13,8 +13,8 @@ import { buildVisibleLines, LETTER_STYLE } from '../hooks/engine/layout'
 import { bandKind, keepsRound, readableRound, roundAfter } from '../hooks/engine/lifecycle'
 import { bigNumberRows } from '../hooks/engine/big-digits'
 import { resultToast } from '../hooks/view/shared'
-import { EMPTY_FOLD, foldWindow } from '../hooks/engine/window'
-import { scoreWord, totalSamples } from '../hooks/engine/stats'
+import { droppedWords, trimWindow } from '../hooks/engine/window'
+import { addScoredWords, EMPTY_SCORED, scoreWord, totalSamples } from '../hooks/engine/stats'
 
 const READY: TypingRoundReady = {
   shape: ROUND_SHAPE,
@@ -231,14 +231,14 @@ describe('engine', () => {
     expect(ended.result.wpm).toBe(20)
   })
 
-  test('live wpm reads the running counter; a deletion that removes a space counts again', async () => {
+  test('live wpm reads the committed words\' total; a late change that takes back a space is not taken', async () => {
     const typed = asRunning(applyFieldInput(READY, FIRST_FIELD, 'the quick ', 0))
 
-    expect(typed.correctWordCharacters).toBe(10)
+    expect(typed.scored.correctWordCharacters).toBe(10)
     expect(liveWpm(typed, 6000)).toBe(20)
 
-    const withoutSpace = asRunning(applyFieldInput(typed, FIRST_FIELD, 'the quick', 1000))
-    expect(withoutSpace.correctWordCharacters).toBe(4)
+    // The first field, replaced after "the quick ", sends the text without its last space: a committed word is final.
+    expect(applyFieldInput(typed, FIRST_FIELD, 'the quick', 1000)).toBe(typed)
   })
 
   test('settings: the defaults come from the mode table; /config gives adaptive alone', async () => {
@@ -279,7 +279,12 @@ describe('engine', () => {
 const DAY_ONE_NOON = new Date(2026, 9, 5, 12).getTime()
 const DAY_MS = 86_400_000
 
-const finished = (overrides: Partial<TypingRoundFinished['result']>, round: Partial<TypingRoundFinished> = {}): TypingRoundFinished => ({
+/** A finished round; its committed words are scored as typing would have scored them. */
+const finished = (overrides: Partial<TypingRoundFinished['result']>, round: Partial<TypingRoundFinished> = {}): TypingRoundFinished => {
+  const typedWords = round.typedWords ?? []
+  const targetWords = round.targetWords ?? READY.targetWords
+
+  return {
   ...READY,
   mode: 'time',
   count: 30,
@@ -289,7 +294,8 @@ const finished = (overrides: Partial<TypingRoundFinished['result']>, round: Part
   ending: 'timeUp',
   bigramErrors: {},
   hasPastedText: false,
-  fold: EMPTY_FOLD,
+  scored: addScoredWords(EMPTY_SCORED, typedWords, targetWords),
+  foldedSamples: totalSamples([]),
   progress: undefined,
   result: {
     wpm: 60,
@@ -302,7 +308,8 @@ const finished = (overrides: Partial<TypingRoundFinished['result']>, round: Part
     ...overrides,
   },
   ...round,
-})
+  }
+}
 
 describe('paste guard', () => {
   test('a change that adds more than a burst of keys marks the test as pasted; key by key does not', async () => {
@@ -656,73 +663,72 @@ describe('window', () => {
   // 1500 known words, so nothing random is added while 1300 are typed.
   const LONG_WORDS = Array.from({ length: 1500 }, (_, index) => ['alpha', 'be', 'cat', 'dog'][index % 4] ?? 'alpha')
   const READY_LONG: TypingRoundReady = { ...READY, targetWords: LONG_WORDS }
-  // Every tenth word mistyped, so the folded scores are not all correct.
+  // Every tenth word mistyped, so the scores are not all correct.
   const typedText = (count: number) => LONG_WORDS.slice(0, count).map((word, index) => (index % 10 === 3 ? `x${word}` : word)).join(' ') + ' '
   const countOf = (words: readonly string[], wanted: string) => words.filter(word => word === wanted).length
-  const sumScores = (typed: string, targetWords: readonly string[]) =>
-    parseTyped(typed).committedWords.reduce(
-      (sum, word, index) => {
-        const score = scoreWord(word, targetWords[index] ?? '', true)
-
-        return {
-          correct: sum.correct + score.correct,
-          incorrect: sum.incorrect + score.incorrect,
-          extra: sum.extra + score.extra,
-          missed: sum.missed + score.missed,
-          correctWordCharacters: sum.correctWordCharacters + score.correctWordCharacters,
-        }
-      },
-      { correct: 0, incorrect: 0, extra: 0, missed: 0, correctWordCharacters: 0 },
-    )
-  // A running round holding `text` as committed text: typing folds by itself (see "long flow").
+  // A running round holding `text` as committed text, scored as typing would have: typing drops by itself (see "long flow").
   const holding = (text: string): TypingRoundRunning => {
     const { typedWords, currentWord } = wordsOf(text)
 
-    return { ...asRunning(typeEvenly(READY_LONG, 'alpha ', 0, 10)), typedWords, currentWord, fieldBaseWords: typedWords.length, fieldBasePartial: currentWord.length }
+    return {
+      ...asRunning(typeEvenly(READY_LONG, 'alpha ', 0, 10)),
+      typedWords,
+      currentWord,
+      fieldBaseWords: typedWords.length,
+      fieldBasePartial: currentWord.length,
+      scored: addScoredWords(EMPTY_SCORED, typedWords, LONG_WORDS),
+    }
   }
+
+  test('each committed word is scored once as it is typed: the totals are the whole text scored at once', async () => {
+    const typed = asRunning(typeEvenly(READY_LONG, typedText(300), 0, 100))
+    // As typed: a mistyped "xalpha" is "xalph", the key past the word's end left out. 300 words stay in the window.
+    const whole = typed.typedWords
+    const sum = (pick: (score: ReturnType<typeof scoreWord>) => number) =>
+      whole.reduce((total, word, index) => total + pick(scoreWord(word, LONG_WORDS[index] ?? '', true)), 0)
+
+    expect(typed.scored.words).toBe(300)
+    expect(typed.scored.chars).toEqual({
+      correct: sum(score => score.correct),
+      incorrect: sum(score => score.incorrect),
+      extra: sum(score => score.extra),
+      missed: sum(score => score.missed),
+    })
+    expect(typed.scored.correctWordCharacters).toBe(sum(score => score.correctWordCharacters))
+    // Each committed target counts its pairs once: "al" once per "alpha", "be" once per "be".
+    const targets = LONG_WORDS.slice(0, 300)
+    expect(typed.scored.bigramAttempts).toMatchObject({ al: countOf(targets, 'alpha'), be: countOf(targets, 'be') })
+  })
 
   test('up to 5000 characters of committed text the round is returned as it is', async () => {
     const running = holding(typedText(900))
 
     expect(typedOf(running).length).toBeLessThanOrEqual(5000)
-    expect(foldWindow(running)).toBe(running)
+    expect(trimWindow(running)).toBe(running)
   })
 
-  test('past 5000 characters whole words fold, 2500 or more stay, and window plus fold score as the whole text did', async () => {
+  test('past 5000 characters whole words leave the window, 2500 or more stay, and the totals stay as they were', async () => {
     const running = holding(typedText(1300))
-    const folded = foldWindow(running)
-    const foldedWords = folded.fold.words
+    const trimmed = trimWindow(running)
+    const dropped = droppedWords(trimmed)
 
     expect(typedOf(running).length).toBeGreaterThan(5000)
-    expect(typedOf(folded).length).toBeGreaterThanOrEqual(2500)
-    // At most one more word could have folded: "xalpha " is the longest.
-    expect(typedOf(folded).length).toBeLessThan(2500 + 'xalpha '.length)
-    expect(folded.targetWords[0]).toBe(LONG_WORDS[foldedWords])
-    expect(parseTyped(typedOf(folded)).committedWords.length).toBe(1300 - foldedWords)
-    expect(typedOf(folded)).toBe(typedOf(running).slice(folded.fold.droppedCharacters))
-    expect(folded.fieldBaseWords).toBe(running.fieldBaseWords - foldedWords)
-
-    const whole = sumScores(typedOf(running), running.targetWords)
-    const window = sumScores(typedOf(folded), folded.targetWords)
-    expect({
-      correct: folded.fold.chars.correct + window.correct,
-      incorrect: folded.fold.chars.incorrect + window.incorrect,
-      extra: folded.fold.chars.extra + window.extra,
-      missed: folded.fold.chars.missed + window.missed,
-      correctWordCharacters: folded.fold.correctWordCharacters + window.correctWordCharacters,
-    }).toEqual(whole)
-    // Each folded target counts its pairs once: "al" once per "alpha", "be" once per "be".
-    const foldedTargets = LONG_WORDS.slice(0, foldedWords)
-    expect(folded.fold.bigramAttempts).toMatchObject({ al: countOf(foldedTargets, 'alpha'), be: countOf(foldedTargets, 'be') })
+    expect(typedOf(trimmed).length).toBeGreaterThanOrEqual(2500)
+    // At most one more word could have gone: "xalpha " is the longest.
+    expect(typedOf(trimmed).length).toBeLessThan(2500 + 'xalpha '.length)
+    expect(trimmed.targetWords[0]).toBe(LONG_WORDS[dropped])
+    expect(trimmed.typedWords).toEqual(running.typedWords.slice(dropped))
+    expect(trimmed.fieldBaseWords).toBe(running.fieldBaseWords - dropped)
+    expect(trimmed.scored).toBe(running.scored)
   })
 
   test('old per-second samples fold into totals with the same mean and spread', async () => {
     const samples = Array.from({ length: 130 }, (_, index) => index % 7)
     const running: TypingRoundRunning = { ...asRunning(typeEvenly(READY_LONG, 'alpha ', 0, 10)), keystrokesPerSecond: samples }
-    const folded = foldWindow(running)
+    const folded = trimWindow(running)
 
     expect(folded.keystrokesPerSecond).toEqual(samples.slice(70))
-    expect(folded.fold.samples).toEqual(totalSamples(samples.slice(0, 70)))
+    expect(folded.foldedSamples).toEqual(totalSamples(samples.slice(0, 70)))
   })
 })
 
@@ -733,7 +739,7 @@ describe('long flow', () => {
   const typedWord = (index: number) => (index % 10 === 3 ? `x${LONG_WORDS[index]?.slice(1) ?? ''}` : (LONG_WORDS[index] ?? ''))
   const typedText = (count: number) => Array.from({ length: count }, (_, index) => typedWord(index)).join(' ') + ' '
 
-  test('3000 words fold several times and score exactly as the whole text would', async () => {
+  test('3000 words leave the window several times and score exactly as the whole text would', async () => {
     const text = typedText(3000)
     // One key every 100 ms: second n holds keys 10n to 10n + 9.
     const windowed = asRunning(typeEvenly(READY_LONG, text, 0, 100))
@@ -743,16 +749,17 @@ describe('long flow', () => {
       ...wordsOf(text),
       targetWords: LONG_WORDS,
       keystrokesPerSecond: allSamples,
-      fold: EMPTY_FOLD,
+      foldedSamples: totalSamples([]),
+      scored: addScoredWords(EMPTY_SCORED, wordsOf(text).typedWords, LONG_WORDS),
     }
 
-    expect(windowed.fold.words).toBeGreaterThan(2000)
+    expect(droppedWords(windowed)).toBeGreaterThan(2000)
     expect(baseOf(windowed).length).toBeLessThanOrEqual(5000)
     expect(calculateResult(windowed, 'complete')).toEqual(calculateResult(whole, 'complete'))
   })
 
-  // At the limit: about 5000 characters of typed text, the window's target words as a JSON array,
-  // and the folded totals. The field's base is a place, not a second copy of the text.
+  // At the limit: about 5000 characters of typed words, the window's target words as a JSON array,
+  // and the totals. The field's base is a place, not a second copy of the text.
   test('3600 words of flow keep the round under 16 KB', async () => {
     let round: TypingRound = createRound(1, DEFAULT_SETTINGS, [])
     let now = 0
@@ -769,18 +776,18 @@ describe('long flow', () => {
       }
     }
 
-    expect(round.phase === 'running' && round.fold.words).toBeGreaterThan(2500)
+    expect(droppedWords(round)).toBeGreaterThan(2500)
     expect(JSON.stringify(round).length).toBeLessThan(16_000)
   })
 
-  test('a key from the field drawn before a fold lands after the fold, trimmed by what was dropped', async () => {
+  test('a key from the field drawn before a drop lands after it, its base moved by the words dropped', async () => {
     // The first word whose space takes the committed text past 5000 characters.
     const crossing = Array.from({ length: 2000 }, (_, count) => count).find(count => typedText(count + 1).length > 5000) ?? 0
     const before = asRunning(typeEvenly(READY_LONG, `${typedText(crossing)}${typedWord(crossing)}`, 0, 100))
-    expect(before.fold.words).toBe(0)
-    // That space commits the word and folds; the old field's next key arrives late.
+    expect(droppedWords(before)).toBe(0)
+    // That space commits the word and drops the oldest; the old field's next key arrives late.
     const folded = asRunning(applyFieldInput(before, drawnField(before), `${typedWord(crossing)} `, 600_000))
-    expect(folded.fold.words).toBeGreaterThan(0)
+    expect(droppedWords(folded)).toBeGreaterThan(0)
 
     const nextLetter = LONG_WORDS[crossing + 1]?.[0] ?? 'a'
     const late = asRunning(
@@ -791,12 +798,12 @@ describe('long flow', () => {
     expect(late.correctKeystrokes).toBe(folded.correctKeystrokes + 1)
   })
 
-  test('the folded words count as letter-pair attempts', async () => {
+  test('the words that left the window count as letter-pair attempts', async () => {
     const windowed = asRunning(typeEvenly(READY_LONG, typedText(3000), 0, 100))
     const recorded = recordResult(EMPTY_PROGRESS, finishByPlayer(windowed), DAY_ONE_NOON)
 
-    expect(windowed.fold.words).toBeGreaterThan(0)
-    // "alpha" is every fourth of the 3000 words: 750 attempts at "al", folded or not.
+    expect(droppedWords(windowed)).toBeGreaterThan(0)
+    // "alpha" is every fourth of the 3000 words: 750 attempts at "al", in the window or not.
     expect(recorded.progress.bigrams['al']?.attempts).toBe(750)
   })
 })

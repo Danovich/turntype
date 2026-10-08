@@ -10,10 +10,10 @@ import type {
 
 import { isEndless, MODES } from './modes'
 import { countOf } from './settings'
-import { calculateResult, countCorrectWordCharacters } from './stats'
+import { addScoredWords, calculateResult, EMPTY_SCORED } from './stats'
 import { activeElapsedMs, isTimeUp, pausedPartOfGap } from './timing'
 import { parseTyped } from './typed-text'
-import { EMPTY_FOLD, foldOf, foldWindow } from './window'
+import { droppedWords, trimWindow } from './window'
 import { FALLBACK_WORD_LIST, pickWords } from './word-list'
 import type { WordList } from './word-list'
 
@@ -24,7 +24,9 @@ export const ROUND_ENDING = {
 } as const satisfies Record<TypingRoundEnding, TypingRoundEnding>
 
 /** The version of the round's shape: raised whenever its fields change, so a round kept over a reload from another version is dropped. */
-export const ROUND_SHAPE = 2
+export const ROUND_SHAPE = 3
+
+const EMPTY_SAMPLES = { count: 0, sum: 0, sumOfSquares: 0 } as const
 
 const INITIAL_ENDLESS_WORDS = 40
 const LOOKAHEAD_WORDS = 20
@@ -71,7 +73,6 @@ type KeystrokeTally = {
   readonly currentWord: string
   readonly correct: number
   readonly incorrect: number
-  readonly correctWordCharacters: number
   readonly didCommit: boolean
   /** Expected letter pairs whose second letter was missed, one entry per wrong key. */
   readonly missedBigrams: readonly string[]
@@ -84,7 +85,6 @@ const tallyAppended = (committedCount: number, currentWord: string, appended: st
     currentWord,
     correct: 0,
     incorrect: 0,
-    correctWordCharacters: 0,
     didCommit: false,
     missedBigrams: [],
   }
@@ -103,7 +103,6 @@ const tallyAppended = (committedCount: number, currentWord: string, appended: st
         currentWord: '',
         correct: tally.correct + (isCorrect ? 1 : 0),
         incorrect: tally.incorrect + (isCorrect ? 0 : 1),
-        correctWordCharacters: tally.correctWordCharacters + (isCorrect ? targetWord.length + 1 : 0),
         didCommit: true,
         missedBigrams: tally.missedBigrams,
       }
@@ -161,7 +160,8 @@ export const finishRound = (round: TypingRoundRunning, ending: TypingRoundEnding
   ending,
   bigramErrors: round.bigramErrors,
   hasPastedText: round.hasPastedText,
-  fold: round.fold,
+  scored: round.scored,
+  foldedSamples: round.foldedSamples,
   result: calculateResult(round, ending),
   progress: undefined,
 })
@@ -228,6 +228,10 @@ const withFreshField = <R extends TypingRoundReady | TypingRoundRunning>(round: 
   fieldValue: textFromWord(typedWords, currentWord, round.fieldBaseWords).slice(round.fieldBasePartial),
 })
 
+/** `committed` (the words from `fromWord` on) still holds every committed word from there, as typed. */
+const keepsCommittedWords = (typedWords: readonly string[], fromWord: number, committed: readonly string[]): boolean =>
+  typedWords.slice(fromWord).every((word, index) => committed[index] === word)
+
 /** The words of `typedWords` before `fromWord`, then `committed`: the same array where nothing changed. */
 const joinWords = (typedWords: readonly string[], fromWord: number, committed: readonly string[]): readonly string[] =>
   fromWord + committed.length === typedWords.length && committed.every((word, index) => word === typedWords[fromWord + index])
@@ -241,14 +245,14 @@ export const expireRound = (round: TypingRound, now: number): TypingRound =>
 /**
  * An input field as the pane drew it: its index, where its own text started (after `baseWords`
  * committed words, `basePartial` characters into the next), and how many words the window had
- * folded then. A field drawn before a fold counts its base from the old start, so the words folded
+ * dropped then. A field drawn before a drop counts its base from the old start, so the words dropped
  * since are taken off.
  */
 export type DrawnField = {
   readonly fieldIndex: number
   readonly baseWords: number
   readonly basePartial: number
-  readonly foldedWords: number
+  readonly droppedWords: number
 }
 
 /** The round's current field, as the pane draws it now. */
@@ -256,7 +260,7 @@ export const drawnField = (round: TypingRound): DrawnField => ({
   fieldIndex: round.fieldIndex,
   baseWords: round.fieldBaseWords,
   basePartial: round.fieldBasePartial,
-  foldedWords: foldOf(round).words,
+  droppedWords: droppedWords(round),
 })
 
 /**
@@ -277,7 +281,7 @@ export const applyFieldInput = (
   const previousWords = round.phase === 'running' ? round.typedWords : []
   const previousCurrent = round.phase === 'running' ? round.currentWord : ''
   // The field's base in today's window, as a word and a number of characters from that word's start.
-  const shiftedBase = field.baseWords - (foldOf(round).words - field.foldedWords)
+  const shiftedBase = field.baseWords - (droppedWords(round) - field.droppedWords)
   const fromWord = Math.min(Math.max(0, shiftedBase), previousWords.length)
   const previousTail = textFromWord(previousWords, previousCurrent, fromWord)
   const basePartial = shiftedBase < 0 ? 0 : shiftedBase > previousWords.length ? previousTail.length : Math.min(field.basePartial, previousTail.length)
@@ -302,6 +306,10 @@ export const applyFieldInput = (
   }
 
   const parsedTail = parseTyped(tail)
+  // A committed word is final: a late change that would take one back (its space deleted) is not taken.
+  if (!keepsCommittedWords(previousWords, fromWord, parsedTail.committedWords)) {
+    return round
+  }
   const typedWords = joinWords(previousWords, fromWord, parsedTail.committedWords)
   const { currentWord } = parsedTail
   const isAppend = tail.startsWith(previousTail)
@@ -335,17 +343,20 @@ export const applyFieldInput = (
     correctKeystrokes: (started?.correctKeystrokes ?? 0) + tally.correct,
     incorrectKeystrokes: (started?.incorrectKeystrokes ?? 0) + tally.incorrect,
     // Appending adds to the count; a deletion can remove a committed space, so count again.
-    correctWordCharacters: isAppend
-      ? (started?.correctWordCharacters ?? 0) + tally.correctWordCharacters
-      : (started?.fold.correctWordCharacters ?? 0) + countCorrectWordCharacters(typedWords, round.targetWords),
+    // Each word committed by this change, scored once: it is final from here on.
+    scored: addScoredWords(
+      started?.scored ?? EMPTY_SCORED,
+      typedWords.slice(previousWords.length),
+      round.targetWords.slice(previousWords.length),
+    ),
     keystrokesPerSecond: started?.keystrokesPerSecond ?? [],
     bigramErrors: addBigramErrors(started?.bigramErrors ?? {}, tally.missedBigrams),
     hasPastedText: (started?.hasPastedText ?? false) || appended.length > MAX_CHARACTERS_PER_INPUT,
-    fold: started?.fold ?? EMPTY_FOLD,
+    foldedSamples: started?.foldedSamples ?? EMPTY_SAMPLES,
   }
   // Samples go to active seconds, so a pause adds no empty seconds to the consistency.
   // The array starts after the folded seconds.
-  const secondIndex = Math.floor(activeElapsedMs(running, now) / 1000) - running.fold.samples.count
+  const secondIndex = Math.floor(activeElapsedMs(running, now) / 1000) - running.foldedSamples.count
   const sampled: TypingRoundRunning = {
     ...running,
     keystrokesPerSecond: addToSecond(running.keystrokesPerSecond, secondIndex, keystrokes),
@@ -361,6 +372,6 @@ export const applyFieldInput = (
     return withFreshField(sampled, typedWords, currentWord)
   }
 
-  // A committed word is final: the time to fold the oldest words once there are enough.
-  return tally.didCommit ? foldWindow(sampled) : sampled
+  // A committed word is final: the time to drop the oldest words once there are enough.
+  return tally.didCommit ? trimWindow(sampled) : sampled
 }
