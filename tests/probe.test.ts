@@ -579,7 +579,18 @@ describe('probe: turns, close and reopen', () => {
     await $.turn.complete({ ...TURN_DONE, turnId: 'sub-1', agentId: 'agent-1' })
     expect(await pane.find({ type: 'Text', text: /Claude is done/ })).toBeUndefined()
     await $.turn.complete({ ...TURN_DONE, turnId: 'turn-1' })
-    expect(await pane.find({ type: 'Text', text: /Claude is done/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: '∘ Claude is done ⋅ finish the word' })).toBeDefined()
+  })
+
+  test('Claude done in a time test: Enter ends it, not the word', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on, picks({ mode: 'time' }))
+    await $.session.start(SESSION)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+
+    await $.turn.complete({ ...TURN_DONE, turnId: 'turn-1' })
+    expect(await pane.find({ type: 'Text', text: '∘ Claude is done ⋅ ⏎ finish' })).toBeDefined()
   })
 
   test('flow ends at the first space after Claude is done, as a complete test', async ($, on) => {

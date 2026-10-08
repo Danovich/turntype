@@ -83,10 +83,15 @@ const stat = ({ Box, Text }: Pick<GameElements, 'Box' | 'Text'>, text: string, p
   </Box>
 )
 
-/** Last on the status row, so a narrow pane cuts it first: Esc, or that Claude is done. Enter is the field's own `⏎ finish`. */
+/**
+ * Last on the status row, so a narrow pane cuts it first: Esc, or that Claude is done and how to
+ * end. Flow ends with the word; time and words end on Enter, the field's own `⏎ finish`.
+ */
 const keyHint = ({ Text }: Pick<GameElements, 'Text'>, round: TypingRoundRunning, palette: Palette) =>
   round.isClaudeDone ? (
-    <Text color={palette.success} wrap={ONE_ROW}>∘ Claude is done ⋅ finish the word</Text>
+    <Text color={palette.success} wrap={ONE_ROW}>
+      {`∘ Claude is done ⋅ ${MODES[round.mode].endsWhen === 'claudeDone' ? 'finish the word' : '⏎ finish'}`}
+    </Text>
   ) : (
     <Text dimColor wrap={ONE_ROW}>esc: hide</Text>
   )
