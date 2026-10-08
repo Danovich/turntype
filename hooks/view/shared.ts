@@ -1,13 +1,13 @@
 import type { Elements } from 'claude-code'
 
-import type { TypingRound, TypingRoundReady, TypingRoundRunning } from '../../types'
+import type { TypingRound, TypingRoundRunning } from '../../types'
 import { TYPING_MODE } from '../engine/settings'
 import { committedWordCount, totalTargetWords } from '../engine/window'
 
 /** The elements the views draw with, as `$.ui.resolve(e)` hands them on a surface that has `Input`. */
 export type GameElements = Pick<Elements['terminal'], 'Box' | 'Button' | 'Input' | 'Text'>
 
-export type ActiveRound = TypingRoundReady | TypingRoundRunning
+export type { ActiveRound } from '../engine/lifecycle'
 
 /** One row, never wrapped: a long row cut short keeps the pane height fixed. */
 export const ONE_ROW = 'truncate-end'

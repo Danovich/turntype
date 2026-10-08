@@ -338,6 +338,22 @@ describe('probe: the pane never changes height', () => {
     expect(await elementsBeforeField()).not.toContain('Button')
   })
 
+  test('a finished test is saved once, however often the finished round changes after', { options: { mode: 'words', wordCount: '10' } }, async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    for (let index = 0; index < 10; index++) {
+      await typeNextWord(pane)
+    }
+    expect(await isFinished(pane)).toBe(true)
+
+    // The summary attached, Claude's turn ending, details shown: each changes the finished round.
+    await $.turn.complete({ ...TURN_DONE, turnId: 'turn-1' })
+    await pane.press({ key: 'details' })
+    // Saved twice, today's total would count two tests.
+    expect(Object.values(world.saved.get('daily') as Record<string, { tests: number }>).map(day => day.tests)).toEqual([1])
+  })
+
   test('a store that fails: the card has no progress line but keeps its height', async ($, on) => {
     const clock = mock.clock(on)
     const world = stubWorld(on)

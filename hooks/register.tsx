@@ -2,6 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PaneOpenArgs, Register, Timer, UiOpenResult } from 'claude-code'
 
 import type { TypingPicks, TypingRound, TypingRoundFinished, TypingRoundReady, TypingSettings } from '../types'
+import { bandKind, isActive, keepsRound, roundAfter } from './engine/lifecycle'
+import type { RoundNeed } from './engine/lifecycle'
 import {
   configKey,
   LEGACY_PROGRESS_KEY,
@@ -35,7 +37,6 @@ import { paletteFor, THEME_PALETTE } from './view/palette'
 import type { Palette } from './view/palette'
 import type { OpenOptions, PickerActions, PickerProps } from './view/picker'
 import { modeLabel } from './view/shared'
-import type { ActiveRound } from './view/shared'
 
 const NO_PICKS: TypingPicks | null = null
 const picksAtom = atom({ plugin: 'turntype', key: 'picks' } as const, NO_PICKS)
@@ -71,8 +72,6 @@ let refocusTimer: Timer | undefined
 let pendingTurnId: string | undefined
 // The /config defaults (userConfig), under the saved picks. A change in /config reloads the module, so register reads them again.
 let defaultSettings: TypingSettings = DEFAULT_SETTINGS
-// The round being saved: a finish can be seen by two updates before its summary is attached.
-let recordingRoundId: number | undefined
 // The word lists, read from files at session.start (and so on each reload). Not $.state: a round
 // names its list, and $.state would copy every list across the host boundary on each read.
 let wordLists: ReadonlyMap<string, WordList> = new Map([[FALLBACK_WORD_LIST.name, FALLBACK_WORD_LIST]])
@@ -84,9 +83,6 @@ const JSON_EXTENSION = '.json'
 // call each time; a new theme shows from the next redraw.
 let palette: Palette = THEME_PALETTE
 const THEME_CONFIG_KEY = 'theme'
-
-const isActive = (round: TypingRound | null): round is ActiveRound =>
-  round?.phase === 'ready' || round?.phase === 'running'
 
 const nextRoundId = (round: TypingRound | null): number => (round?.roundId ?? 0) + 1
 
@@ -229,16 +225,11 @@ const loadProgress = async (dollar: Dollar): Promise<void> => {
 }
 
 /**
- * Saves a finished test once, then attaches its summary to the round for the result card. The
- * summary compares with the progress as read; each part is then merged into a fresh read of it.
- * When the store fails the card shows the result alone; the game never stops for it.
+ * Saves a finished test, then attaches its summary to the round for the result card. The summary
+ * compares with the progress as read; each part is then merged into a fresh read of it. When the
+ * store fails the card shows the result alone; the game never stops for it.
  */
 const recordProgress = async (dollar: Dollar, round: TypingRoundFinished): Promise<void> => {
-  if (round.progress !== undefined || recordingRoundId === round.roundId) {
-    return
-  }
-  recordingRoundId = round.roundId
-
   try {
     const now = Date.now()
     const { summary } = recordResult(await readProgress(dollar), round, now)
@@ -261,12 +252,21 @@ const recordProgress = async (dollar: Dollar, round: TypingRoundFinished): Promi
   }
 }
 
-/** The one place a round changes: it runs the clock, and saves a test the moment it finishes. */
+/**
+ * The one place a round changes: it runs the clock, and saves a test the moment it finishes. The
+ * save follows the change to finished, seen inside the one update: a later update of a finished
+ * round (its summary attached, a turn's end) never saves it again.
+ */
 const replaceRound = async (dollar: Dollar, change: (round: TypingRound | null) => TypingRound | null): Promise<void> => {
-  const round = await update(dollar, roundAtom, change)
+  let wasFinished = false
+  const round = await update(dollar, roundAtom, current => {
+    wasFinished = current?.phase === 'finished'
+
+    return change(current)
+  })
   syncTicker(dollar, round)
 
-  if (round?.phase === 'finished') {
+  if (round?.phase === 'finished' && !wasFinished) {
     await recordProgress(dollar, round)
   }
 }
@@ -314,15 +314,10 @@ const roundMaker = async (dollar: Dollar, given?: TypingSettings) => {
   }
 }
 
-const startNewRound = async (dollar: Dollar): Promise<void> => {
-  const makeRound = await roundMaker(dollar)
-  await replaceRound(dollar, makeRound)
-}
-
-/** The invitation after the delay: a test in progress outlives the turn that started it. */
-const showInvitation = async (dollar: Dollar): Promise<void> => {
-  const makeRound = await roundMaker(dollar)
-  await replaceRound(dollar, round => (round?.phase === 'running' ? round : makeRound(round)))
+/** A round for `need`: the one there when it serves (keepsRound), else a new one made with `given` or the settings in use. */
+const ensureRound = async (dollar: Dollar, need: RoundNeed, given?: TypingSettings): Promise<void> => {
+  const makeRound = await roundMaker(dollar, given)
+  await replaceRound(dollar, round => (keepsRound(round, need) ? round : makeRound(round)))
 }
 
 /** Copies the saved picks into state, where a drawing reads them. At start and after /clear. */
@@ -342,8 +337,7 @@ const loadPicks = async (dollar: Dollar): Promise<void> => {
  */
 const applySettings = async (dollar: Dollar, chosen: TypingSettings): Promise<void> => {
   await update(dollar, picksAtom, () => picksOf(chosen))
-  const makeRound = await roundMaker(dollar, chosen)
-  await replaceRound(dollar, round => (round?.phase === 'running' ? round : makeRound(round)))
+  await ensureRound(dollar, 'settings', chosen)
   try {
     await dollar.store.set(PICKED_SETTINGS_KEY, picksOf(chosen))
   } catch {
@@ -401,8 +395,7 @@ const setPaneFocused = async (dollar: Dollar, isFocused: boolean): Promise<void>
  * Says whether the pane is drawn: where nothing draws (the VS Code chat panel, `claude -p`) it is not.
  */
 const openGame = async (dollar: Dollar): Promise<UiOpenResult> => {
-  const makeRound = await roundMaker(dollar)
-  await replaceRound(dollar, round => (isActive(round) ? round : makeRound(round)))
+  await ensureRound(dollar, 'open')
   await update(dollar, isGameOpenAtom, () => true)
   const opened = await dollar.ui.open(GAME_PANE)
   // Focus is a request: text in the composer refuses it, and then the band keeps its way back.
@@ -462,7 +455,6 @@ const closeGame = async (dollar: Dollar): Promise<void> => {
  * $.state value to its default, but session.start does not fire again.
  */
 const syncSession = async (dollar: Dollar): Promise<void> => {
-  recordingRoundId = undefined
   await loadPicks(dollar)
   await loadProgress(dollar)
   const pane = await findGamePane(dollar)
@@ -543,11 +535,7 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     stopRefocus()
     await update($, isGameOpenAtom, () => false)
-    // A test in progress waits in the band; an untouched round stays only while Claude still works.
-    const isTurnRunning = pendingTurnId !== undefined
-    await replaceRound($, round =>
-      round?.phase === 'running' || (round?.phase === 'ready' && isTurnRunning) ? round : null,
-    )
+    await replaceRound($, round => roundAfter(round, { kind: 'paneClosed', isTurnRunning: pendingTurnId !== undefined }))
 
     return result
   }).catch(($, e, next) => next(e))
@@ -585,7 +573,7 @@ export const register: Register = (on, options) => {
     // Short turns never show the invitation; a test in progress outlives the turn that started it.
     $.clock.after(APPEAR_AFTER_MS, () => {
       if (pendingTurnId === turnId) {
-        void showInvitation($)
+        void ensureRound($, 'invitation')
       }
     })
 
@@ -600,14 +588,7 @@ export const register: Register = (on, options) => {
       // The person writes the next prompt now: never take the keys from them.
       stopRefocus()
       const isGameOpen = await read($, isGameOpenAtom)
-      await replaceRound($, round => {
-        // An untouched invitation leaves with the turn; an open game stays for the player.
-        if (round?.phase === 'ready') {
-          return isGameOpen ? round : null
-        }
-
-        return round?.phase === 'running' ? { ...round, isClaudeDone: true } : round
-      })
+      await replaceRound($, round => roundAfter(round, { kind: 'turnComplete', isGameOpen }))
     }
 
     return result
@@ -628,19 +609,19 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     const round = await read($, roundAtom)
+    const kind = bandKind(round, isGameOpen)
 
-    if (round === null) {
+    if (round === null || kind === 'none') {
       return next(e)
     }
-
     const elements = $.ui.resolve(e)
     const openFromBand = () => void openGame($)
 
-    if (isGameOpen) {
-      return isActive(round) ? backToTypingBand(elements, round, openFromBand) : next(e)
+    if (round.phase === 'finished') {
+      return resultBand(elements, round, palette, openFromBand)
     }
 
-    return round.phase === 'finished' ? resultBand(elements, round, palette, openFromBand) : invitationBand(elements, round, openFromBand)
+    return kind === 'back' ? backToTypingBand(elements, round, openFromBand) : invitationBand(elements, round, openFromBand)
   })
 
   // The game pane: nine rows in every phase. Words, the field and live stats, then the picker
@@ -659,7 +640,7 @@ export const register: Register = (on, options) => {
         round,
         { isTerminal: e.surface === 'terminal', isDetailsShown: await read($, isDetailsShownAtom), palette, picker: await pickerProps($) },
         {
-          onAgain: () => void startNewRound($),
+          onAgain: () => void ensureRound($, 'again'),
           onClose: () => void closeGame($),
           onToggleDetails: () => void update($, isDetailsShownAtom, isShown => !isShown),
           picker: pickerActions($),

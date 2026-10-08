@@ -9,6 +9,7 @@ import { calculateResult, kogasa, liveWpm } from '../hooks/engine/stats'
 import { activeElapsedMs, isIdle } from '../hooks/engine/timing'
 import { parseTyped } from '../hooks/engine/typed-text'
 import { buildVisibleLines, LETTER_STYLE } from '../hooks/engine/layout'
+import { bandKind, keepsRound, roundAfter } from '../hooks/engine/lifecycle'
 import { bigNumberRows } from '../hooks/engine/big-digits'
 import { EMPTY_FOLD, foldWindow } from '../hooks/engine/window'
 import { scoreWord, totalSamples } from '../hooks/engine/stats'
@@ -409,6 +410,48 @@ describe('adaptive words', () => {
     // About 0.3 by design, plus the words that hold "ck" anyway; random, so a wide margin.
     expect(practiceShare).toBeGreaterThan(0.15)
     expect(pickWords(ENGLISH_SAMPLE, 400).filter(word => word.includes('ck')).length / 400).toBeLessThan(0.1)
+  })
+})
+
+describe('round lifecycle', () => {
+  const running = () => asRunning(applyFieldInput(READY, 0, 0, 't', 0))
+  const finished = () => finishByPlayer(running())
+
+  test('a turn ends: a test in progress learns Claude is done; an untouched round stays only in an open game', async () => {
+    expect(roundAfter(running(), { kind: 'turnComplete', isGameOpen: false })).toMatchObject({ phase: 'running', isClaudeDone: true })
+    expect(roundAfter(READY, { kind: 'turnComplete', isGameOpen: true })).toBe(READY)
+    expect(roundAfter(READY, { kind: 'turnComplete', isGameOpen: false })).toBeNull()
+    const done = finished()
+    expect(roundAfter(done, { kind: 'turnComplete', isGameOpen: false })).toBe(done)
+    expect(roundAfter(null, { kind: 'turnComplete', isGameOpen: true })).toBeNull()
+  })
+
+  test('the pane closes: a test in progress waits; an untouched round stays only while Claude works; a result goes', async () => {
+    const test = running()
+    expect(roundAfter(test, { kind: 'paneClosed', isTurnRunning: false })).toBe(test)
+    expect(roundAfter(READY, { kind: 'paneClosed', isTurnRunning: true })).toBe(READY)
+    expect(roundAfter(READY, { kind: 'paneClosed', isTurnRunning: false })).toBeNull()
+    expect(roundAfter(finished(), { kind: 'paneClosed', isTurnRunning: true })).toBeNull()
+  })
+
+  test('a round is kept when it serves the need: a test in progress always, an untouched one when the game opens', async () => {
+    const needs = ['invitation', 'settings', 'open', 'again'] as const
+    const kept = (round: TypingRound | null) => needs.filter(need => keepsRound(round, need))
+
+    expect(kept(running())).toEqual(['invitation', 'settings', 'open'])
+    expect(kept(READY)).toEqual(['open'])
+    expect(kept(finished())).toEqual([])
+    expect(kept(null)).toEqual([])
+  })
+
+  test('the band: nothing without a round, the way back in an open game, else the invitation or the result', async () => {
+    expect(bandKind(null, false)).toBe('none')
+    expect(bandKind(READY, true)).toBe('back')
+    expect(bandKind(running(), true)).toBe('back')
+    expect(bandKind(finished(), true)).toBe('none')
+    expect(bandKind(READY, false)).toBe('invite')
+    expect(bandKind(running(), false)).toBe('invite')
+    expect(bandKind(finished(), false)).toBe('result')
   })
 })
 
