@@ -151,6 +151,16 @@ export type TypingRoundFinished = TypingRoundBase & {
 
 export type TypingRound = TypingRoundReady | TypingRoundRunning | TypingRoundFinished
 
+/** One local day's practice as the store had it, and the streak before it: what the band's daily goal reads. */
+export type TypingDayStanding = {
+  /** The local day, `YYYY-MM-DD`. */
+  readonly day: string
+  readonly tests: number
+  readonly activeMs: number
+  /** Days in a row with a test, ending the day before `day`. */
+  readonly streakBefore: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'turntype': {
@@ -171,6 +181,8 @@ declare module 'claude-code' {
       personalBests: Readonly<Record<string, number>>
       /** The player's weakest letter pairs from the store: new rounds practice them. */
       focusBigrams: readonly string[]
+      /** Today's practice and the streak, from the store; null until read, or without a store. */
+      dayStanding: TypingDayStanding | null
     }
   }
 }

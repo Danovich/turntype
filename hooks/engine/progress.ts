@@ -1,4 +1,4 @@
-import type { TypingPbOutcome, TypingProgressSummary, TypingRound, TypingRoundFinished } from '../../types'
+import type { TypingDayStanding, TypingPbOutcome, TypingProgressSummary, TypingRound, TypingRoundFinished } from '../../types'
 
 import { MODES } from './modes'
 import { ROUND_ENDING } from './round'
@@ -129,6 +129,38 @@ const previousDay = (date: Date): Date => new Date(date.getFullYear(), date.getM
 const countStreak = (daily: StoredProgress['daily'], day: Date): number =>
   daily[dayKey(day)] === undefined ? 0 : 1 + countStreak(daily, previousDay(day))
 
+/** The practice of `now`'s day as saved, and the streak before it. */
+export const dayStanding = (daily: StoredProgress['daily'], now: number): TypingDayStanding => {
+  const today = new Date(now)
+  const total = daily[dayKey(today)] ?? { tests: 0, activeMs: 0 }
+
+  return { day: dayKey(today), tests: total.tests, activeMs: total.activeMs, streakBefore: countStreak(daily, previousDay(today)) }
+}
+
+export type TodayPractice = {
+  readonly activeMs: number
+  /** Days in a row with a test: today's included once played, until then the run that ended yesterday. */
+  readonly streakDays: number
+  readonly isPlayedToday: boolean
+}
+
+/**
+ * Today as of `now`, from a standing read that day or the day before (a session open past
+ * midnight): yesterday's standing gives a day with nothing typed yet, its streak still alive.
+ */
+export const todayPractice = (standing: TypingDayStanding, now: number): TodayPractice => {
+  const today = new Date(now)
+
+  if (standing.day === dayKey(today)) {
+    const isPlayedToday = standing.tests > 0
+
+    return { activeMs: standing.activeMs, streakDays: standing.streakBefore + (isPlayedToday ? 1 : 0), isPlayedToday }
+  }
+  const isFromYesterday = standing.day === dayKey(previousDay(today))
+
+  return { activeMs: 0, streakDays: isFromYesterday && standing.tests > 0 ? standing.streakBefore + 1 : 0, isPlayedToday: false }
+}
+
 const addToDaily = (daily: StoredProgress['daily'], today: string, durationMs: number): StoredProgress['daily'] => {
   const before = daily[today] ?? { tests: 0, activeMs: 0 }
   const entries = Object.entries({ ...daily, [today]: { tests: before.tests + 1, activeMs: before.activeMs + durationMs } })
@@ -233,14 +265,13 @@ export const recordResult = (progress: StoredProgress, round: TypingRoundFinishe
   const { result } = round
   const key = configKey(round)
   const recorded = applyProgressChanges(progress, progressChanges(round, now))
-  const today = new Date(now)
-  const todayTotal = recorded.daily[dayKey(today)] ?? { tests: 0, activeMs: 0 }
+  const standing = dayStanding(recorded.daily, now)
   const previousBest = progress.personalBests[key]
   const sameConfigHistory = progress.history.filter(entry => entry.key === key)
   const dayTotals = {
-    todayTests: todayTotal.tests,
-    todayActiveMs: todayTotal.activeMs,
-    streakDays: countStreak(recorded.daily, today),
+    todayTests: standing.tests,
+    todayActiveMs: standing.activeMs,
+    streakDays: todayPractice(standing, now).streakDays,
   }
   const reason = unfairReason(round)
 

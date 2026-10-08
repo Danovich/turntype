@@ -506,6 +506,55 @@ describe('probe: turns, close and reopen', () => {
     expect(await band.find({ type: 'Button', key: 'play' })).toMatchObject({ props: { label: 'type while you wait' } })
   })
 
+  /** The local day `days` before today, as the store keys it. */
+  const daysAgo = (days: number): string => {
+    const date = new Date()
+    date.setDate(date.getDate() - days)
+
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  }
+  const TWO_DAYS_PLAYED = { daily: { [daysAgo(2)]: { tests: 1, activeMs: 60_000 }, [daysAgo(1)]: { tests: 2, activeMs: 120_000 } } }
+
+  /** A turn long enough for the invitation, the band mounted: its dim text beside `press 1:`. */
+  const invitationTexts = async ($: Engine, clock: ReturnType<typeof mock.clock>) => {
+    await $.session.start(SESSION)
+    await $.turn.start({ text: 'go', turnId: 'turn-1' })
+    await clock.advance(3000)
+    const band = await $.ui.mount({ plugin: GAME, surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+    return (await band.findAll({ type: 'Text' })).map(found => found.text)
+  }
+
+  test("the invitation shows today's goal, and the streak to keep before today's first test", async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on, TWO_DAYS_PLAYED)
+
+    expect(await invitationTexts($, clock)).toContain('0/5 min today ⋅ keep your 2-day streak')
+  })
+
+  test('the goal met: a check and the minutes; played today, the streak counts today', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on, { daily: { ...TWO_DAYS_PLAYED.daily, [daysAgo(0)]: { tests: 3, activeMs: 330_000 } } })
+    const texts = await invitationTexts($, clock)
+
+    expect(texts).toContain('✓')
+    expect(texts).toContain('5 min today ⋅ 3-day streak')
+  })
+
+  test('the goal off in /config: the streak alone', { options: { dailyGoal: 'off' } }, async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on, TWO_DAYS_PLAYED)
+
+    expect(await invitationTexts($, clock)).toContain('keep your 2-day streak')
+  })
+
+  test('a first day with the goal off: nothing beside the invitation', { options: { dailyGoal: 'off' } }, async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+
+    expect(await invitationTexts($, clock)).toEqual(['press'])
+  })
+
   test('"again" twice in a row: each press is one new round, the field always fresh', async ($, on) => {
     const clock = mock.clock(on)
     stubWorld(on)

@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { TypingRound, TypingRoundFinished, TypingRoundReady, TypingRoundRunning } from '../types'
-import { applyProgressChanges, EMPTY_PROGRESS, parseLegacyProgress, progressChanges, recordResult, sparkline, weakBigrams } from '../hooks/engine/progress'
+import { applyProgressChanges, dayStanding, EMPTY_PROGRESS, parseLegacyProgress, progressChanges, recordResult, sparkline, todayPractice, weakBigrams } from '../hooks/engine/progress'
 import { FALLBACK_WORD_LIST, parseWordList, pickWords, wordListOrder } from '../hooks/engine/word-list'
 import { applyFieldInput, createRound, expireRound, finishByPlayer, finishRound, ROUND_ENDING } from '../hooks/engine/round'
-import { DEFAULT_SETTINGS, parseSavedPicks, parseTypingSettings } from '../hooks/engine/settings'
+import { DEFAULT_SETTINGS, parseDailyGoalMinutes, parseSavedPicks, parseTypingSettings } from '../hooks/engine/settings'
 import { COUNTED_MODES, MODES } from '../hooks/engine/modes'
 import { calculateResult, kogasa, liveWpm } from '../hooks/engine/stats'
 import { activeElapsedMs, isIdle } from '../hooks/engine/timing'
@@ -372,6 +372,34 @@ describe('progress', () => {
     expect(today.summary.trendDelta).toBe(6)
     expect(today.summary.streakDays).toBe(2)
     expect(today.summary.todayTests).toBe(1)
+  })
+
+  test('today: the streak counts today once played, and until then the run that ended yesterday', async () => {
+    const twoDays = recordResult(recordResult(EMPTY_PROGRESS, finished({}), DAY_ONE_NOON - 2 * DAY_MS).progress, finished({}), DAY_ONE_NOON - DAY_MS)
+    const notYet = dayStanding(twoDays.progress.daily, DAY_ONE_NOON)
+    const played = recordResult(twoDays.progress, finished({ durationMs: 90_000 }), DAY_ONE_NOON)
+
+    expect(todayPractice(notYet, DAY_ONE_NOON)).toEqual({ activeMs: 0, streakDays: 2, isPlayedToday: false })
+    expect(todayPractice(dayStanding(played.progress.daily, DAY_ONE_NOON), DAY_ONE_NOON)).toEqual({
+      activeMs: 90_000,
+      streakDays: 3,
+      isPlayedToday: true,
+    })
+    expect(played.summary.streakDays).toBe(3)
+  })
+
+  test('today past midnight: a standing from yesterday keeps its streak alive; an older one has none', async () => {
+    const yesterday = recordResult(EMPTY_PROGRESS, finished({}), DAY_ONE_NOON - DAY_MS)
+    const standing = dayStanding(yesterday.progress.daily, DAY_ONE_NOON - DAY_MS)
+
+    expect(todayPractice(standing, DAY_ONE_NOON)).toEqual({ activeMs: 0, streakDays: 1, isPlayedToday: false })
+    expect(todayPractice(standing, DAY_ONE_NOON + DAY_MS)).toEqual({ activeMs: 0, streakDays: 0, isPlayedToday: false })
+  })
+
+  test('the daily goal from /config: minutes, or off', async () => {
+    expect(parseDailyGoalMinutes({ dailyGoal: '5' })).toBe(5)
+    expect(parseDailyGoalMinutes({ dailyGoal: 'off' })).toBeUndefined()
+    expect(parseDailyGoalMinutes({})).toBeUndefined()
   })
 
   test('sparkline: lowest to highest; a flat run sits in the middle', async () => {

@@ -1,12 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PaneOpenArgs, Register, Timer, UiOpenResult } from 'claude-code'
 
-import type { TypingPicks, TypingRound, TypingRoundFinished, TypingRoundReady, TypingSettings } from '../types'
+import type { TypingDayStanding, TypingPicks, TypingRound, TypingRoundFinished, TypingRoundReady, TypingSettings } from '../types'
 import { bandKind, isActive, keepsRound, roundAfter } from './engine/lifecycle'
 import type { RoundNeed } from './engine/lifecycle'
 import { DEFAULT_WORD_LIST } from './engine/modes'
 import {
   configKey,
+  dayStanding,
   LEGACY_PROGRESS_KEY,
   PART_PARSERS,
   parseLegacyProgress,
@@ -14,11 +15,12 @@ import {
   PROGRESS_PARTS,
   progressChanges,
   recordResult,
+  todayPractice,
   weakBigrams,
 } from './engine/progress'
 import type { ProgressPart, StoredProgress } from './engine/progress'
 import { applyFieldInput, createRound, expireRound, finishByPlayer } from './engine/round'
-import { DEFAULT_SETTINGS, parseSavedPicks, parseTypingSettings, PICKED_SETTINGS_KEY, picksOf, settingsInUse } from './engine/settings'
+import { DEFAULT_SETTINGS, parseDailyGoalMinutes, parseSavedPicks, parseTypingSettings, PICKED_SETTINGS_KEY, picksOf, settingsInUse } from './engine/settings'
 import { isIdle, isTimeUp } from './engine/timing'
 import { FALLBACK_WORD_LIST, parseWordList } from './engine/word-list'
 import type { WordList } from './engine/word-list'
@@ -57,6 +59,8 @@ const NO_PERSONAL_BESTS: Readonly<Record<string, number>> = {}
 const personalBestsAtom = atom({ plugin: 'turntype', key: 'personalBests' } as const, NO_PERSONAL_BESTS)
 const NO_BIGRAMS: readonly string[] = []
 const focusBigramsAtom = atom({ plugin: 'turntype', key: 'focusBigrams' } as const, NO_BIGRAMS)
+const NO_DAY_STANDING: TypingDayStanding | null = null
+const dayStandingAtom = atom({ plugin: 'turntype', key: 'dayStanding' } as const, NO_DAY_STANDING)
 
 // ─── Resources ───────────────────────────────────────────────────────────────────────────────
 // The word lists (files of the mod) and the colors of the Claude Code theme, read at session start.
@@ -127,6 +131,8 @@ const loadPalette = async (dollar: Dollar): Promise<void> => {
 
 // Adaptive comes from /config: a change there reloads the module, and register reads it again.
 let defaultSettings: TypingSettings = DEFAULT_SETTINGS
+// The daily goal in minutes, from /config the same way; undefined: off.
+let dailyGoalMinutes: number | undefined
 
 /** The settings in use: the picks over the defaults. */
 const readSettings = async (dollar: Dollar): Promise<TypingSettings> => settingsInUse(defaultSettings, await read(dollar, picksAtom))
@@ -155,10 +161,11 @@ const savePicks = async (dollar: Dollar, chosen: TypingSettings): Promise<void> 
 // The results in the store, one key per part, shared by every session on the machine. A save reads
 // each part again right before writing it, so a test another session saved meanwhile is kept.
 
-/** Keeps in state what a key or a new round reads: the personal bests and the weak letter pairs. */
+/** Keeps in state what a key, a new round or the band reads: the personal bests, the weak letter pairs, today. */
 const publishProgress = async (dollar: Dollar, progress: StoredProgress): Promise<void> => {
   await update(dollar, personalBestsAtom, () => personalBestWpms(progress))
   await update(dollar, focusBigramsAtom, () => weakBigrams(progress))
+  await update(dollar, dayStandingAtom, () => dayStanding(progress.daily, Date.now()))
 }
 
 /** Reads one saved part; a missing or broken one is empty. */
@@ -497,6 +504,7 @@ let pendingTurnId: string | undefined
 
 export const register: Register = (on, options) => {
   defaultSettings = parseTypingSettings(options)
+  dailyGoalMinutes = parseDailyGoalMinutes(options)
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -633,7 +641,14 @@ export const register: Register = (on, options) => {
       return resultBand(elements, round, palette, openFromBand)
     }
 
-    return kind === 'back' ? backToTypingBand(elements, round, openFromBand) : invitationBand(elements, round, openFromBand)
+    if (kind === 'back') {
+      return backToTypingBand(elements, round, openFromBand)
+    }
+    // Only the invitation shows today: a test waiting to continue is not subscribed to it.
+    const standing = round.phase === 'ready' ? await read($, dayStandingAtom) : null
+    const daily = standing === null ? undefined : { practice: todayPractice(standing, Date.now()), goalMinutes: dailyGoalMinutes }
+
+    return invitationBand(elements, round, palette, daily, openFromBand)
   })
 
   // The game pane: nine rows in every phase. Words, the field and live stats, then the toolbar

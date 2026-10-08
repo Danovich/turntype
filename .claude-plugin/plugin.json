@@ -17,6 +17,20 @@
         "off"
       ],
       "default": "on"
+    },
+    "dailyGoal": {
+      "type": "string",
+      "title": "Daily goal (minutes)",
+      "description": "Minutes of typing a day, shown above the prompt beside your streak. off: the streak alone.",
+      "options": [
+        "off",
+        "3",
+        "5",
+        "10",
+        "15",
+        "30"
+      ],
+      "default": "5"
     }
   }
 }

@@ -1,4 +1,5 @@
 import type { TypingRoundFinished } from '../../types'
+import type { TodayPractice } from '../engine/progress'
 import type { Palette } from './palette'
 import { progressLabel } from './shared'
 import type { ActiveRound, GameElements } from './shared'
@@ -43,10 +44,51 @@ export const resultBand = (elements: BandElements, round: TypingRoundFinished, p
   )
 }
 
-/** The invitation while Claude works, or a test in progress waiting while the pane is closed. */
-export const invitationBand = (elements: BandElements, round: ActiveRound, onOpen: () => void) => {
-  const label = round.phase === 'running' ? `continue ⋅ ${progressLabel(round)}` : 'type while you wait'
+/** Today's practice beside the invitation; `goalMinutes` undefined: the goal is off, the streak alone. */
+export type DailyGoal = { readonly practice: TodayPractice; readonly goalMinutes: number | undefined }
 
-  // The invitation alone, `press 1: type while you wait`: the mode shows in the pane.
-  return pressOne(elements, 'play', label, onOpen)
+const MINUTE_MS = 60_000
+/** A one-day run is no streak worth a word. */
+const MIN_STREAK_SHOWN = 2
+
+/** `2/5 min today ⋅ 4-day streak`, or `keep your 4-day streak` before today's first test; met: `✓ 5 min today`. */
+const dailyGoalRow = ({ Box, Text }: BandElements, { practice, goalMinutes }: DailyGoal, palette: Palette) => {
+  const minutes = Math.floor(practice.activeMs / MINUTE_MS)
+  const isMet = goalMinutes !== undefined && minutes >= goalMinutes
+  const goal = goalMinutes === undefined ? [] : [isMet ? `${minutes} min today` : `${minutes}/${goalMinutes} min today`]
+  const streak = practice.streakDays < MIN_STREAK_SHOWN ? [] : [`${practice.isPlayedToday ? '' : 'keep your '}${practice.streakDays}-day streak`]
+  const parts = [...goal, ...streak]
+
+  if (parts.length === 0) {
+    return undefined
+  }
+
+  return (
+    <Box flexDirection="row" columnGap={1}>
+      {isMet && <Text color={palette.success}>✓</Text>}
+      <Text dimColor>{parts.join(' ⋅ ')}</Text>
+    </Box>
+  )
+}
+
+/**
+ * The invitation while Claude works, with today's goal and streak; or a test in progress waiting
+ * while the pane is closed, its progress alone.
+ */
+export const invitationBand = (elements: BandElements, round: ActiveRound, palette: Palette, daily: DailyGoal | undefined, onOpen: () => void) => {
+  if (round.phase === 'running') {
+    return pressOne(elements, 'play', `continue ⋅ ${progressLabel(round)}`, onOpen)
+  }
+  // No mode label: the mode shows in the pane.
+  const invitation = pressOne(elements, 'play', 'type while you wait', onOpen)
+  const goalRow = daily === undefined ? undefined : dailyGoalRow(elements, daily, palette)
+
+  const { Box } = elements
+
+  return goalRow === undefined ? invitation : (
+    <Box flexDirection="row" columnGap={3}>
+      {invitation}
+      {goalRow}
+    </Box>
+  )
 }

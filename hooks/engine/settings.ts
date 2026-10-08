@@ -55,3 +55,10 @@ export const parseTypingSettings = (options: PluginOptions): TypingSettings => (
 /** The count a settings' mode is played with: its count, or none for a mode without one (flow). */
 export const countOf = (settings: TypingSettings): number | undefined =>
   isCountedMode(settings.mode) ? settings.counts[settings.mode] : undefined
+
+/** The daily goal from /config, in minutes of typing; undefined when off. */
+export const parseDailyGoalMinutes = (options: PluginOptions): number | undefined => {
+  const minutes = Number(options['dailyGoal'])
+
+  return Number.isInteger(minutes) && minutes > 0 ? minutes : undefined
+}
