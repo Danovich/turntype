@@ -3,8 +3,10 @@
  * Run: claude plugin test <mod folder>
  *
  * Time here is the mocked `$.clock`. The mod reads `Date.now()` for typing speed and for the time
- * limit, so a time test running out and idle pauses are covered by engine.test.ts, not here.
- * The test's `$` raises events, not engine calls: it cannot press Esc on the pane (`ui.close`).
+ * limit, which the mocked clock does not move: the probes of a time test running out and of idle
+ * pauses wait in real time (a 1 s time test, a 3 s pause), with the clock advanced for the ticks.
+ * The test's `$` raises events, not engine calls: it cannot press Esc on the pane (`ui.close`), and
+ * it types only into a field on show, so a late key in a replaced field is covered by engine.test.ts.
  * Check by hand: Esc during a test keeps it in the band ("continue"); Esc on an untouched
  * round during a turn keeps the invitation until the turn ends.
  */
@@ -1154,5 +1156,213 @@ describe('probe: theme colors', () => {
     const { pane } = await openFromBand($, clock)
 
     expect(await selectedColor(pane)).toBe('warning')
+  })
+})
+
+/** A timer in real time: the test runtime has one, the mod's typings do not declare it. */
+declare const setTimeout: (callback: () => void, ms: number) => unknown
+
+describe('probe: every flow through the pane', () => {
+  /** A list of `count` words of `length` letters each (aaaa, bbbb, ...): every word the same length, so wpm is exact. */
+  const evenList = (length: number, count = 20) =>
+    JSON.stringify({ words: Array.from({ length: count }, (_, index) => (String.fromCharCode(97 + (index % 26)) + String(index)).padEnd(length, 'x')) })
+  /** Waits in real time: the mod reads Date.now() for the time limit and idle pauses, which the mocked clock does not move. */
+  const realWait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+  /** Types one word and its space in two changes, for long tests: a paste to the guard, the same text to the round. */
+  const typeWordFast = async (pane: PaneHandle): Promise<void> => {
+    const key = await fieldKey(pane)
+    const word = await currentWord(pane)
+    if (key === undefined || word === '') {
+      throw new Error('no field or no current word on show')
+    }
+    await pane.input({ key, text: word, kind: 'change' })
+    await pane.input({ key, text: `${word} `, kind: 'change' })
+  }
+
+  test('a time test runs out on the clock: the result at the limit, saved, with a milestone', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on, picks({ mode: 'time', time: 1 }))
+    world.wordListFiles = { 'english.json': evenList(9) }
+    await $.session.start(SESSION)
+    const { pane } = await openFromBand($, clock)
+
+    // One word of 9 letters and its space: 10 correct characters in the 1 s limit is 120 wpm.
+    await typeNextWord(pane)
+    await realWait(1100)
+    await clock.advance(1000)
+
+    expect(await isFinished(pane)).toBe(true)
+    expect(await pane.find({ type: 'Text', text: '100% accuracy' })).toBeDefined()
+    expect(Object.values(world.saved.get('daily') as Record<string, { tests: number }>).map(day => day.tests)).toEqual([1])
+    expect(world.toasts).toEqual(['✦ first 120 wpm test'])
+  })
+
+  test('a faster time test: one toast with the new best and the milestone', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on, picks({ mode: 'time', time: 1 }))
+    world.wordListFiles = { 'english.json': evenList(9) }
+    await $.session.start(SESSION)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    await realWait(1100)
+    await clock.advance(1000)
+
+    // Again, two words: 240 wpm, a new best and past 150.
+    await pane.press({ key: 'again' })
+    await typeNextWord(pane)
+    await typeNextWord(pane)
+    await realWait(1100)
+    await clock.advance(1000)
+
+    expect(await isFinished(pane)).toBe(true)
+    expect(world.toasts.at(-1)).toBe('✦ new personal best: 240 wpm ⋅ time 1 ⋅ first 150 wpm test')
+  })
+
+  test('Enter ends a time test early: a result, but no personal best try', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on, picks({ mode: 'time', time: 30 }))
+    await $.session.start(SESSION)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    await pressEnter(pane)
+
+    expect(await isFinished(pane)).toBe(true)
+    expect(await pane.find({ type: 'Text', text: 'not a personal best try: ended early' })).toBeDefined()
+  })
+
+  test('Enter ends a flow test as complete', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    await pressEnter(pane)
+
+    expect(await isFinished(pane)).toBe(true)
+    // Complete, but under the 15 s a flow test needs to be fair.
+    expect(await pane.find({ type: 'Text', text: 'not a personal best try: under 15 s' })).toBeDefined()
+  })
+
+  test('a words test ends at the last letter of its last word, with no space', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on, picks({ mode: 'words', words: 3 }))
+    await $.session.start(SESSION)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    await typeNextWord(pane)
+    expect(await pane.find({ type: 'Text', text: /^2\/3$/ })).toBeDefined()
+
+    await typeNextWord(pane)
+    expect(await isFinished(pane)).toBe(true)
+    expect(await pane.find({ type: 'Text', text: '100% accuracy' })).toBeDefined()
+    expect(world.saved.get('history')).toHaveLength(1)
+  })
+
+  test("keys past a word's end are left out: a fresh field holds the word, and it counts as right", async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    const word = await currentWord(pane)
+
+    await pane.input({ key: 'r1-f0', text: word, kind: 'change' })
+    await pane.input({ key: 'r1-f0', text: `${word}x`, kind: 'change' })
+    expect(await fieldKey(pane)).toBe('r1-f1')
+    expect(await pane.find({ type: 'Input' })).toMatchObject({ props: { value: word } })
+    expect((await pane.findAll({ type: 'Text' })).some(found => found.props['color'] === 'error')).toBe(false)
+
+    await pane.input({ key: 'r1-f1', text: `${word} `, kind: 'change' })
+    expect(await pane.find({ type: 'Text', text: /^1 word$/ })).toBeDefined()
+    await pressEnter(pane)
+    expect(await pane.find({ type: 'Text', text: '100% accuracy' })).toBeDefined()
+  })
+
+  test('a typo fixed with backspace still costs accuracy; the word counts as right', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on, picks({ mode: 'words', words: 10 }))
+    await $.session.start(SESSION)
+    const { pane } = await openFromBand($, clock)
+    const word = await currentWord(pane)
+
+    await pane.input({ key: 'r1-f0', text: '#', kind: 'change' })
+    expect((await pane.findAll({ type: 'Text' })).some(found => found.props['color'] === 'error')).toBe(true)
+    await pane.input({ key: 'r1-f0', text: '', kind: 'change' })
+    for (let length = 1; length <= word.length + 1; length++) {
+      await pane.input({ key: 'r1-f0', text: `${word} `.slice(0, length), kind: 'change' })
+    }
+    expect(await pane.find({ type: 'Text', text: /^1\/10$/ })).toBeDefined()
+
+    await pressEnter(pane)
+    const accuracy = Math.round(((word.length + 1) / (word.length + 2)) * 100)
+    expect(await pane.find({ type: 'Text', text: `${accuracy}% accuracy` })).toBeDefined()
+  })
+
+  test('the pane loses the keys mid-test: the band offers the way back, and the test goes on where it was', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    const { band, pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    await typeNextWord(pane)
+    const key = await fieldKey(pane)
+
+    // The keys went elsewhere (a click on the prompt); a reload reads that from the engine.
+    world.isPaneFocused = false
+    await $.session.start(SESSION)
+    expect(await band.find({ type: 'Button', key: 'play' })).toMatchObject({ props: { label: 'back to typing ⋅ 2 words' } })
+
+    await band.press({ key: 'play' })
+    expect(world.isPaneFocused).toBe(true)
+    expect(await fieldKey(pane)).toBe(key)
+    await typeNextWord(pane)
+    expect(await pane.find({ type: 'Text', text: /^3 words$/ })).toBeDefined()
+  })
+
+  test('a reload mid-test keeps the test: the same field, and the words go on', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    await typeNextWord(pane)
+    const key = await fieldKey(pane)
+
+    // A reload (/reload-plugins, a /config change) raises session.start again; the round stays in state.
+    await $.session.start(SESSION)
+    expect(world.openPaneIds.has(GAME)).toBe(true)
+    expect(await fieldKey(pane)).toBe(key)
+    await typeNextWord(pane)
+    expect(await pane.find({ type: 'Text', text: /^3 words$/ })).toBeDefined()
+  })
+
+  test('a long flow test past the window drop: the field keeps working and every word counts', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    // 24 letters a word: 25 characters with the space, so 230 words are past the 5000 at which old words leave.
+    world.wordListFiles = { 'english.json': evenList(24) }
+    await $.session.start(SESSION)
+    const { pane } = await openFromBand($, clock)
+
+    for (let index = 0; index < 230; index++) {
+      await typeWordFast(pane)
+    }
+    expect(await pane.find({ type: 'Text', text: /^230 words$/ })).toBeDefined()
+    // After the drop, a word typed key by key lands as before.
+    await typeNextWord(pane)
+    expect(await pane.find({ type: 'Text', text: /^231 words$/ })).toBeDefined()
+    await pressEnter(pane)
+    expect(await pane.find({ type: 'Text', text: '100% accuracy' })).toBeDefined()
+  })
+
+  test('idle: the clock stops and the status says so; the next key resumes', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+
+    // Past the 3 s idle limit in real time, then a tick redraws the status.
+    await realWait(3200)
+    await clock.advance(1000)
+    expect(await pane.find({ type: 'Text', text: 'paused ⋅ type to resume' })).toBeDefined()
+
+    await typeNextWord(pane)
+    expect(await pane.find({ type: 'Text', text: 'paused ⋅ type to resume' })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: /^2 words$/ })).toBeDefined()
   })
 })
