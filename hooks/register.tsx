@@ -342,8 +342,15 @@ const roundMaker = async (dollar: Dollar, given?: TypingSettings) => {
   }
 }
 
-/** A round for `need`: the one there when it serves (keepsRound), else a new one made with `given` or the settings in use. */
+/**
+ * A round for `need`: the one there when it serves (keepsRound), else a new one made with `given`
+ * or the settings in use. A round that serves needs nothing read or written; the check runs again
+ * inside the update, so a round that changed meanwhile is still judged as it is then.
+ */
 const ensureRound = async (dollar: Dollar, need: RoundNeed, given?: TypingSettings): Promise<void> => {
+  if (keepsRound(await readRound(dollar), need)) {
+    return
+  }
   const makeRound = await roundMaker(dollar, given)
   await replaceRound(dollar, round => (keepsRound(round, need) ? round : makeRound(round)))
 }
