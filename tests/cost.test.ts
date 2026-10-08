@@ -33,10 +33,13 @@ const stubCounting = (on: On): Counts => {
 
     return { value: [...openPaneIds].map(id => ({ id, title: id, isShown: true, isFocused: true, isPlaced: true })) }
   })
+  return counts
+}
+
+/** A store with nothing saved: what a new player has. */
+const stubEmptyStore = (on: On): void => {
   on('store.get', () => ({ value: undefined }))
   on('store.set', () => ({ value: undefined }))
-
-  return counts
 }
 
 const reset = (counts: Counts): void => {
@@ -47,6 +50,7 @@ const reset = (counts: Counts): void => {
 test('cost: typing 20 words with the pane focused', async ($, on) => {
   const clock = mock.clock(on)
   const counts = stubCounting(on)
+  stubEmptyStore(on)
   await $.turn.start({ text: 'go', turnId: 'turn-1' })
   await clock.advance(3000)
   const band = await $.ui.mount({ plugin: GAME, surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
@@ -74,6 +78,7 @@ test('cost: typing 20 words with the pane focused', async ($, on) => {
 test('cost: 10 clock ticks of a running test with the pane closed', async ($, on) => {
   const clock = mock.clock(on)
   const counts = stubCounting(on)
+  stubEmptyStore(on)
   await $.turn.start({ text: 'go', turnId: 'turn-1' })
   await clock.advance(3000)
   const band = await $.ui.mount({ plugin: GAME, surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
@@ -90,4 +95,73 @@ test('cost: 10 clock ticks of a running test with the pane closed', async ($, on
   // The band shows no time: a tick that only moves the clock must not draw it. Before the fix: 10.
   expect(counts.bandRenders, 'band redraws per 10 ticks').toBe(0)
   expect(counts.panes, 'ui.panes calls per 10 ticks').toBe(0)
+})
+
+/** The store calls the mod makes, and the most of each kind in flight at once: calls made together overlap. */
+type StoreCounts = { gets: string[]; sets: string[]; maxGetsAtOnce: number; maxSetsAtOnce: number }
+
+/** A store that answers a moment later, so calls made together are seen in flight together. */
+const stubSlowStore = (on: On): StoreCounts => {
+  const counts: StoreCounts = { gets: [], sets: [], maxGetsAtOnce: 0, maxSetsAtOnce: 0 }
+  let getsInFlight = 0
+  let setsInFlight = 0
+  const aMoment = async () => {
+    for (let tick = 0; tick < 5; tick++) {
+      await Promise.resolve()
+    }
+  }
+  on('store.get', async (_, e) => {
+    counts.gets.push(e.key)
+    counts.maxGetsAtOnce = Math.max(counts.maxGetsAtOnce, ++getsInFlight)
+    await aMoment()
+    getsInFlight--
+
+    return { value: undefined }
+  })
+  on('store.set', async (_, e) => {
+    counts.sets.push(e.key)
+    counts.maxSetsAtOnce = Math.max(counts.maxSetsAtOnce, ++setsInFlight)
+    await aMoment()
+    setsInFlight--
+
+    return { value: undefined }
+  })
+
+  return counts
+}
+
+test('cost: a finished test reads each progress part once and writes it once, all four at once', async ($, on) => {
+  const clock = mock.clock(on)
+  stubCounting(on)
+  const store = stubSlowStore(on)
+  await $.turn.start({ text: 'go', turnId: 'turn-1' })
+  await clock.advance(3000)
+  const band = await $.ui.mount({ plugin: GAME, surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  await band.press({ key: 'play' })
+  const pane = await $.ui.mount({ plugin: GAME, surface: 'terminal', component: 'Pane', requestId: GAME, props: PANE_PROPS })
+  await pane.input({ key: 'r1-f0', text: 'x', kind: 'change' })
+  store.gets.length = 0
+  store.maxGetsAtOnce = 0
+
+  await pane.input({ key: 'r1-f0', text: 'x', kind: 'submit' })
+  await clock.settle()
+
+  // Before: 18 calls one after another (a legacy check, 4 reads, then a read and a write per part).
+  expect(store.gets.toSorted(), 'store reads at the end of a test').toEqual(['bigrams', 'daily', 'history', 'personalBests'])
+  expect(store.sets.toSorted(), 'store writes at the end of a test').toEqual(['bigrams', 'daily', 'history', 'personalBests'])
+  expect(store.maxGetsAtOnce, 'reads in flight at once').toBe(4)
+  expect(store.maxSetsAtOnce, 'writes in flight at once').toBe(4)
+})
+
+test('cost: a session start reads the store at once: the picks, the old record and the four parts', async ($, on) => {
+  stubCounting(on)
+  const store = stubSlowStore(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.register', (_, e) => ({ value: { command: e.name } }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  expect(store.gets.toSorted(), 'store reads at a start').toEqual(['bigrams', 'daily', 'history', 'personalBests', 'progress', 'settings'])
+  // Before: 6 reads one after another.
+  expect(store.maxGetsAtOnce, 'reads in flight at once').toBe(6)
 })

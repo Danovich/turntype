@@ -892,15 +892,15 @@ describe('probe: the store, shared by every session', () => {
     expect(world.saved.get('bigrams')).toEqual(newerBigrams)
   })
 
-  test("another session's result saved between this session's read and its save is kept", async ($, on) => {
+  test("another session's result saved while this test ran is kept, merged, not written over", async ($, on) => {
     const clock = mock.clock(on)
     const world = stubWorld(on)
     const otherResult = { key: 'words:10:english', at: 42, wpm: 77, accuracy: 99 }
     let personalBestReads = 0
     world.beforeGet = key => {
       personalBestReads += key === 'personalBests' ? 1 : 0
-      // Read 1 is for the summary, read 2 starts the save: the other session's whole save lands in between.
-      if (key === 'personalBests' && personalBestReads === 2) {
+      // The one read before the save: the other session's whole save lands just before it.
+      if (key === 'personalBests' && personalBestReads === 1) {
         world.saved.set('history', [otherResult])
         world.saved.set('personalBests', { 'words:10:english': { wpm: 77, accuracy: 99, at: 42 } })
       }

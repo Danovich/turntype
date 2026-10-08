@@ -14,7 +14,6 @@ import {
   parseLegacyProgress,
   personalBestWpms,
   PROGRESS_PARTS,
-  progressChanges,
   recordResult,
   todayPractice,
   weakBigrams,
@@ -104,13 +103,9 @@ const loadWordLists = async (dollar: Dollar): Promise<void> => {
       .filter(entry => entry.kind === 'file' && entry.name.endsWith(JSON_EXTENSION))
       .map(entry => entry.name)
       .toSorted()
-    const loaded: WordList[] = []
-    for (const fileName of fileNames) {
-      const list = await readWordList(dollar, folder, fileName)
-      if (list !== undefined) {
-        loaded.push(list)
-      }
-    }
+    const loaded = (await Promise.all(fileNames.map(fileName => readWordList(dollar, folder, fileName)))).filter(
+      (list): list is WordList => list !== undefined,
+    )
     // The file's English replaces the fallback of the same name.
     wordLists = new Map([[FALLBACK_WORD_LIST.name, FALLBACK_WORD_LIST], ...loaded.map((list): [string, WordList] => [list.name, list])])
   } catch {
@@ -163,85 +158,77 @@ const savePicks = async (dollar: Dollar, chosen: TypingSettings): Promise<void> 
 
 // ─── Progress ────────────────────────────────────────────────────────────────────────────────
 // The results in the store, one key per part, shared by every session on the machine. A save reads
-// each part again right before writing it, so a test another session saved meanwhile is kept.
+// every part right before writing it and merges the test in, so a test another session saved is kept.
 
 /** Keeps in state what a key, a new round or the band reads: the personal bests, the weak letter pairs, today. */
 const publishProgress = async (dollar: Dollar, progress: StoredProgress): Promise<void> => {
-  await update(dollar, personalBestsAtom, () => personalBestWpms(progress))
-  await update(dollar, focusBigramsAtom, () => weakBigrams(progress))
-  await update(dollar, dayStandingAtom, () => dayStanding(progress.daily, Date.now()))
+  await Promise.all([
+    update(dollar, personalBestsAtom, () => personalBestWpms(progress)),
+    update(dollar, focusBigramsAtom, () => weakBigrams(progress)),
+    update(dollar, dayStandingAtom, () => dayStanding(progress.daily, Date.now())),
+  ])
 }
 
-/** Reads one saved part; a missing or broken one is empty. */
-const readPart = async <P extends ProgressPart>(dollar: Dollar, part: P): Promise<StoredProgress[P]> =>
-  PART_PARSERS[part](await dollar.store.get(part))
-
-/**
- * Reads the saved parts. The one record of versions before 0.8 is split into parts no session has
- * written yet, then deleted: once, and it never replaces a newer part.
- */
-const readProgress = async (dollar: Dollar): Promise<StoredProgress> => {
-  const legacyValue = await dollar.store.get(LEGACY_PROGRESS_KEY)
-
-  if (legacyValue !== undefined) {
-    const legacy = parseLegacyProgress(legacyValue)
-    const savedKeys = new Set(await dollar.store.keys())
-    for (const part of PROGRESS_PARTS.filter(name => !savedKeys.has(name))) {
-      await dollar.store.set(part, legacy[part])
-    }
-    await dollar.store.delete(LEGACY_PROGRESS_KEY)
-  }
+/** Reads the saved parts, all at once; a missing or broken one is empty. */
+const readParts = async (dollar: Dollar): Promise<StoredProgress> => {
+  const [personalBests, history, daily, bigrams] = await Promise.all(PROGRESS_PARTS.map(part => dollar.store.get(part)))
 
   return {
-    personalBests: await readPart(dollar, 'personalBests'),
-    history: await readPart(dollar, 'history'),
-    daily: await readPart(dollar, 'daily'),
-    bigrams: await readPart(dollar, 'bigrams'),
+    personalBests: PART_PARSERS.personalBests(personalBests),
+    history: PART_PARSERS.history(history),
+    daily: PART_PARSERS.daily(daily),
+    bigrams: PART_PARSERS.bigrams(bigrams),
   }
 }
 
-/** Reads one part again right before writing it, so a change another session saved meanwhile is merged, not lost. */
-const savePart = async <P extends ProgressPart>(
-  dollar: Dollar,
-  part: P,
-  change: (value: StoredProgress[P]) => StoredProgress[P],
-): Promise<StoredProgress[P]> => {
-  const saved = change(await readPart(dollar, part))
-  await dollar.store.set(part, saved)
+/**
+ * Reads the saved parts at load. The one record of versions before 0.8 is split into parts no
+ * session has written yet, then deleted: once, and it never replaces a newer part.
+ */
+const loadParts = async (dollar: Dollar): Promise<StoredProgress> => {
+  const [legacyValue, saved] = await Promise.all([dollar.store.get(LEGACY_PROGRESS_KEY), readParts(dollar)])
 
-  return saved
+  if (legacyValue === undefined) {
+    return saved
+  }
+  const legacy = parseLegacyProgress(legacyValue)
+  const savedKeys = new Set(await dollar.store.keys())
+  const missing = PROGRESS_PARTS.filter(part => !savedKeys.has(part))
+  await Promise.all(missing.map(part => dollar.store.set(part, legacy[part])))
+  await dollar.store.delete(LEGACY_PROGRESS_KEY)
+
+  const kept = <P extends ProgressPart>(part: P): StoredProgress[P] => (missing.includes(part) ? legacy[part] : saved[part])
+
+  return { personalBests: kept('personalBests'), history: kept('history'), daily: kept('daily'), bigrams: kept('bigrams') }
 }
 
 /** Copies the saved progress into state. At start and after /clear. */
 const loadProgress = async (dollar: Dollar): Promise<void> => {
   try {
-    await publishProgress(dollar, await readProgress(dollar))
+    await publishProgress(dollar, await loadParts(dollar))
   } catch {
     // No store (an old host, a test without one): play on without personal bests.
   }
 }
 
 /**
- * Saves a finished test, then attaches its summary to the round for the result card. The summary
- * compares with the progress as read; each part is then merged into a fresh read of it. When the
- * store fails the card shows the result alone; the game never stops for it.
+ * Saves a finished test, then attaches its summary to the round for the result card. Each part is
+ * read once, all at once, right before the save: the summary compares with that, and the test is
+ * merged into it, never written over it, so a test another session saved meanwhile is kept. Then
+ * all four are written at once. When the store fails the card shows the result alone.
  */
 const recordProgress = async (dollar: Dollar, round: TypingRoundFinished): Promise<void> => {
   try {
     const now = Date.now()
-    const before = await readProgress(dollar)
+    const before = await readParts(dollar)
     const { progress: after, summary } = recordResult(before, round, now)
-    const changes = progressChanges(round, now)
-    const saved: StoredProgress = {
-      personalBests: await savePart(dollar, 'personalBests', changes.personalBests),
-      history: await savePart(dollar, 'history', changes.history),
-      daily: await savePart(dollar, 'daily', changes.daily),
-      bigrams: await savePart(dollar, 'bigrams', changes.bigrams),
-    }
-    await publishProgress(dollar, saved)
-    await update(dollar, gameAtom, game =>
-      game?.round.phase === 'finished' && game.round.roundId === round.roundId ? { ...game, round: { ...game.round, progress: summary } } : game,
-    )
+    await Promise.all(PROGRESS_PARTS.map(part => dollar.store.set(part, after[part])))
+    await Promise.all([
+      publishProgress(dollar, after),
+      update(dollar, gameAtom, game =>
+        game?.round.phase === 'finished' && game.round.roundId === round.roundId ? { ...game, round: { ...game.round, progress: summary } } : game,
+      ),
+    ])
     const toast = resultToast(round, summary, milestonesReached(before, after, now))
     if (toast !== undefined) {
       dollar.ui.toast(toast)
@@ -470,13 +457,13 @@ const focusField = async (dollar: Dollar): Promise<void> => {
  * $.state value to its default, but session.start does not fire again.
  */
 const syncSession = async (dollar: Dollar): Promise<void> => {
-  await loadPicks(dollar)
-  await loadProgress(dollar)
-  const pane = await findGamePane(dollar)
-  await update(dollar, isGameOpenAtom, () => pane !== undefined)
-  await setPaneFocused(dollar, pane?.isFocused ?? true)
-  // A reload keeps the round, but one made by a version with another round shape cannot be read.
-  await update(dollar, gameAtom, readableGame)
+  const [pane] = await Promise.all([findGamePane(dollar), loadPicks(dollar), loadProgress(dollar)])
+  await Promise.all([
+    update(dollar, isGameOpenAtom, () => pane !== undefined),
+    setPaneFocused(dollar, pane?.isFocused ?? true),
+    // A reload keeps the round, but one made by a version with another round shape cannot be read.
+    update(dollar, gameAtom, readableGame),
+  ])
 
   // A reload keeps the round; a reset leaves none, and an open pane would stay empty.
   if (pane !== undefined && (await read(dollar, gameAtom)) === null) {
@@ -521,19 +508,18 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    // Lists and colors first: syncSession may draw, and a new round names its list.
-    await loadWordLists($)
-    await loadPalette($)
+    // Everything at once: none of these waits for another, so a start (and every reload, as after a
+    // change in /config) takes one round of host calls, not one after another.
+    await Promise.all([
+      // A refused name throws: caught, so the rest still loads.
+      $.command.register({ name: 'type', description: 'Type while Claude works: open the turntype game', immediate: true }).catch(() => undefined),
+      loadWordLists($),
+      loadPalette($),
+      syncSession($),
+    ])
     // Lists and colors are module variables, not state: a pane drawn before they were read (a
-    // reload, as after a change in /config, draws the open pane at once) is drawn again with them.
+    // reload draws the open pane at once) is drawn again with them.
     $.ui.invalidate('ui.render')
-    await syncSession($)
-    // Last: a refused name throws, and nothing after it would run.
-    await $.command.register({
-      name: 'type',
-      description: 'Type while Claude works: open the turntype game',
-      immediate: true,
-    })
 
     return result
   })
