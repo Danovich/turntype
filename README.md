@@ -20,7 +20,7 @@ Pick a mode in the toolbar under the field before the first key (`◍ english �
 
 ## Word lists
 
-The words come from JSON files in `word-lists/`: `english` (200 common words), `english_1k`, `english_5k` and `english_10k` (the 1,000, 5,000 and about 10,000 most common words, from [Monkeytype](https://github.com/monkeytypegame/monkeytype)), and `code` (keywords, identifiers and symbols such as `=>` and `?.`). To change the list, open it in the toolbar before you start typing (`◍ english`): every list shows by its file name.
+The words come from JSON files in `word-lists/`: `english` (200 common words), `english_1k`, `english_5k` and `english_10k` (the 1,000, 5,000 and about 10,000 most common words, from [Monkeytype](https://github.com/monkeytypegame/monkeytype)). To change the list, open it in the toolbar before you start typing (`◍ english`): every list shows by its file name.
 
 To add a list, add a file such as `word-lists/german.json`:
 
@@ -30,10 +30,10 @@ To add a list, add a file such as `word-lists/german.json`:
 
 - The file name is the list's name: lowercase letters, digits, underscores and dashes (`english_1k`).
 - A list needs at least 20 words. A word has no spaces and at most 24 characters. Repeats are removed.
-- A file that is not valid is left out. An unknown name uses `english`.
-- Personal bests are kept per list, so `code` never competes with `english`.
+- A file that is not valid shows in the toolbar until you pick it: the pick then says so, keeps the list in use, and the file leaves the toolbar. An unknown name uses `english`.
+- Personal bests are kept per list, so `english_10k` never competes with `english`.
 
-The lists are read when the session starts and when the mod reloads.
+The list names are read when the session starts and when the mod reloads. A list's words are read the first time it is used, then kept.
 
 ## Keys
 

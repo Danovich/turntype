@@ -24,7 +24,7 @@ import type { FieldAsDrawn } from './engine/field'
 import { createRound, expireRound, finishByPlayer } from './engine/round'
 import { DEFAULT_SETTINGS, parseDailyGoalMinutes, parseSavedPicks, parseTypingSettings, PICKED_SETTINGS_KEY, picksOf, settingsInUse } from './engine/settings'
 import { isIdle, isTimeUp } from './engine/timing'
-import { FALLBACK_WORD_LIST, parseWordList } from './engine/word-list'
+import { FALLBACK_WORD_LIST, isWordListName, parseWordList } from './engine/word-list'
 import type { WordList } from './engine/word-list'
 import { backToTypingBand, invitationBand, resultBand } from './view/band'
 import { gameView } from './view/game'
@@ -65,51 +65,77 @@ const NO_DAY_STANDING: TypingDayStanding | null = null
 const dayStandingAtom = atom({ plugin: 'turntype', key: 'dayStanding' } as const, NO_DAY_STANDING)
 
 // ─── Resources ───────────────────────────────────────────────────────────────────────────────
-// The word lists (files of the mod) and the colors of the Claude Code theme, read at session start.
-// Module variables, not $.state: a key and a redraw read them with no host call, and $.state would
-// copy every list across the host boundary on each read. A reload reads them again.
+// The word lists (files of the mod) and the colors of the Claude Code theme. Module variables, not
+// $.state: a key and a redraw read them with no host call, and $.state would copy every list across
+// the host boundary on each read. A reload reads them again.
 
 const WORD_LISTS_FOLDER = 'word-lists'
 const JSON_EXTENSION = '.json'
 const THEME_CONFIG_KEY = 'theme'
 
-let wordLists: ReadonlyMap<string, WordList> = new Map([[FALLBACK_WORD_LIST.name, FALLBACK_WORD_LIST]])
+// The lists the toolbar names: every `*.json` in word-lists/, by file name, read at start. English
+// is always one: without its file the built-in list stands in.
+let listNames: readonly string[] = [DEFAULT_WORD_LIST]
+// The lists read so far. A file is read the first time its list is needed (the one in use at start,
+// or a pick), then kept: a start reads one file, not every list.
+let wordLists: ReadonlyMap<string, WordList> = new Map()
 // A new theme shows from the next redraw.
 let palette: Palette = THEME_PALETTE
 
-/** The list by name; an unknown name (a saved pick of a list since removed) gets English. */
+/** The list by name, once read; one not read (or gone) gets English, its file's or the built-in one. */
 const wordListFor = (name: string): WordList => wordLists.get(name) ?? wordLists.get(DEFAULT_WORD_LIST) ?? FALLBACK_WORD_LIST
 
-/** Reads one list file; a file that is not JSON text or not a valid list is left out. */
-const readWordList = async (dollar: Dollar, folder: string, fileName: string): Promise<WordList | undefined> => {
-  try {
-    const content = await dollar.fs.read(`${folder}/${fileName}`)
+const listFolder = (dollar: Dollar): string => `${dollar.plugin.root}/${WORD_LISTS_FOLDER}`
 
-    return typeof content === 'string' ? parseWordList(fileName.slice(0, -JSON_EXTENSION.length), JSON.parse(content)) : undefined
+/** Names the lists in word-lists/, from the folder alone: no file is read. Without the folder, English alone. */
+const loadListNames = async (dollar: Dollar): Promise<void> => {
+  try {
+    const names = (await dollar.fs.list(listFolder(dollar)))
+      .filter(entry => entry.kind === 'file' && entry.name.endsWith(JSON_EXTENSION))
+      .map(entry => entry.name.slice(0, -JSON_EXTENSION.length))
+      .filter(isWordListName)
+    listNames = [...new Set([DEFAULT_WORD_LIST, ...names])]
   } catch {
-    return undefined
+    listNames = [DEFAULT_WORD_LIST]
   }
+  // A reload reads the files again: one changed since is read as it is now.
+  wordLists = new Map()
 }
 
 /**
- * Reads every `word-lists/*.json` of the mod, in name order: a new list is a new file. Without the
- * folder, or with no valid file, the built-in fallback keeps the game working.
+ * Reads list `name` if it is not read yet. False when it cannot be had: no such list, or a file that
+ * is not JSON text or not a valid list, which then leaves the toolbar. English always can: without
+ * its file, the built-in list.
  */
-const loadWordLists = async (dollar: Dollar): Promise<void> => {
-  const folder = `${dollar.plugin.root}/${WORD_LISTS_FOLDER}`
+const ensureList = async (dollar: Dollar, name: string): Promise<boolean> => {
+  if (wordLists.has(name)) {
+    return true
+  }
+  const list = listNames.includes(name) ? await readWordList(dollar, name) : undefined
+  if (list !== undefined) {
+    wordLists = new Map([...wordLists, [name, list]])
 
+    return true
+  }
+  if (name === DEFAULT_WORD_LIST) {
+    // Read once, broken or missing: the built-in English stands in from now on.
+    wordLists = new Map([...wordLists, [name, FALLBACK_WORD_LIST]])
+
+    return true
+  }
+  listNames = listNames.filter(listName => listName !== name)
+
+  return false
+}
+
+/** Reads one list file; a file that is not JSON text or not a valid list is none. */
+const readWordList = async (dollar: Dollar, name: string): Promise<WordList | undefined> => {
   try {
-    const fileNames = (await dollar.fs.list(folder))
-      .filter(entry => entry.kind === 'file' && entry.name.endsWith(JSON_EXTENSION))
-      .map(entry => entry.name)
-      .toSorted()
-    const loaded = (await Promise.all(fileNames.map(fileName => readWordList(dollar, folder, fileName)))).filter(
-      (list): list is WordList => list !== undefined,
-    )
-    // The file's English replaces the fallback of the same name.
-    wordLists = new Map([[FALLBACK_WORD_LIST.name, FALLBACK_WORD_LIST], ...loaded.map((list): [string, WordList] => [list.name, list])])
+    const content = await dollar.fs.read(`${listFolder(dollar)}/${name}${JSON_EXTENSION}`)
+
+    return typeof content === 'string' ? parseWordList(name, JSON.parse(content)) : undefined
   } catch {
-    // No folder: the fallback alone.
+    return undefined
   }
 }
 
@@ -134,7 +160,7 @@ let dailyGoalMinutes: number | undefined
 
 /** The settings in use: the picks over the defaults. */
 const readSettings = async (dollar: Dollar): Promise<TypingSettings> =>
-  settingsInUse(defaultSettings, await read(dollar, picksAtom), name => wordLists.has(name))
+  settingsInUse(defaultSettings, await read(dollar, picksAtom), name => listNames.includes(name))
 
 /** Copies the saved picks into state, where a drawing reads them. At start and after /clear. */
 const loadPicks = async (dollar: Dollar): Promise<void> => {
@@ -332,6 +358,8 @@ const nextRoundId = (round: TypingRound | null): number => (round?.roundId ?? 0)
  */
 const roundMaker = async (dollar: Dollar, given?: TypingSettings) => {
   const chosen = given ?? (await readSettings(dollar))
+  // Read before the change, which stays synchronous; a list that cannot be read gives English.
+  await ensureList(dollar, chosen.wordList)
   const weak = await read(dollar, focusBigramsAtom)
   const personalBests = await read(dollar, personalBestsAtom)
 
@@ -482,6 +510,15 @@ const syncSession = async (dollar: Dollar): Promise<void> => {
 
 /** A pick in the pane: in use and saved at once, a round not yet started made again with it, the options closed, the keys to the field. */
 const chooseSettings = async (dollar: Dollar, chosen: TypingSettings): Promise<void> => {
+  // A list read for the first time here; one whose file is broken is said so, and the pick not made.
+  if (!(await ensureList(dollar, chosen.wordList))) {
+    dollar.ui.toast(`couldn't read the list ${chosen.wordList}: its file is not a word list`)
+    await update(dollar, openOptionsAtom, () => null)
+    // The list left the toolbar, a module variable: the pane draws again without it.
+    dollar.ui.invalidate('ui.render')
+
+    return
+  }
   await savePicks(dollar, chosen)
   await ensureRound(dollar, 'settings', chosen)
   await update(dollar, openOptionsAtom, () => null)
@@ -491,7 +528,7 @@ const chooseSettings = async (dollar: Dollar, chosen: TypingSettings): Promise<v
 /** The toolbar as the pane draws it: the settings in use, the lists, which group is open. */
 const pickerProps = async (dollar: Dollar): Promise<PickerProps> => ({
   settings: await readSettings(dollar),
-  wordListNames: [...wordLists.keys()],
+  wordListNames: listNames,
   palette,
   openOptions: await read(dollar, openOptionsAtom),
 })
@@ -520,10 +557,12 @@ export const register: Register = (on, options) => {
     await Promise.all([
       // A refused name throws: caught, so the rest still loads.
       $.command.register({ name: 'type', description: 'Type while Claude works: open the turntype game', immediate: true }).catch(() => undefined),
-      loadWordLists($),
+      loadListNames($),
       loadPalette($),
       syncSession($),
     ])
+    // The one list file a start reads: the list in use, known once the picks are.
+    await ensureList($, (await readSettings($)).wordList)
     // Lists and colors are module variables, not state: a pane drawn before they were read (a
     // reload draws the open pane at once) is drawn again with them.
     $.ui.invalidate('ui.render')

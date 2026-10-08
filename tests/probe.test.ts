@@ -969,7 +969,7 @@ describe('probe: word lists', () => {
     expect(await currentWord(pane)).toMatch(/^code\d+$/)
   })
 
-  test('a broken file and a list with too few words are left out; an unknown name gets english', async ($, on) => {
+  test('a picked list whose file is broken gives english at start; .json files alone are lists', async ($, on) => {
     const clock = mock.clock(on)
     const world = stubWorld(on, picks({ wordList: 'broken' }))
     world.wordListFiles = { 'english.json': listFile('eng'), 'broken.json': '{ "words": [', 'short.json': listFile('short', 5), 'notes.txt': 'not a list' }
@@ -979,6 +979,25 @@ describe('probe: word lists', () => {
     expect(await currentWord(pane)).toMatch(/^eng\d+$/)
     // Only .json files are read.
     expect(world.fileReads.some(path => path.endsWith('notes.txt'))).toBe(false)
+  })
+
+  test('a start reads the list in use alone; another is read when picked, once', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on, picks({ wordList: 'code' }))
+    world.wordListFiles = { 'english.json': listFile('eng'), 'code.json': listFile('code'), 'english_10k.json': listFile('big') }
+
+    await $.session.start(SESSION)
+    expect(world.fileReads.map(path => path.split('/').at(-1))).toEqual(['code.json'])
+
+    const { pane } = await openFromBand($, clock)
+    await pane.press({ key: 'pick-list' })
+    await pane.press({ key: 'pick-list-english_10k' })
+    expect(await currentWord(pane)).toMatch(/^big\d+$/)
+    await pane.press({ key: 'pick-list' })
+    await pane.press({ key: 'pick-list-code' })
+    await pane.press({ key: 'pick-list' })
+    await pane.press({ key: 'pick-list-english_10k' })
+    expect(world.fileReads.map(path => path.split('/').at(-1))).toEqual(['code.json', 'english_10k.json'])
   })
 
   test('without the folder the built-in list keeps the game working', async ($, on) => {
@@ -1063,6 +1082,24 @@ describe('probe: toolbar and word list', () => {
     await pane.press({ key: 'pick-list' })
     await pane.press({ key: 'pick-list-code' })
     expect(await currentWord(pane)).toMatch(/^code\d+$/)
+  })
+
+  test('a broken list file shows in the menu until picked; the pick says so and keeps the list in use', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    world.wordListFiles = { ...LISTS(), 'broken.json': '{ "words": [' }
+    await $.session.start(SESSION)
+    const { pane } = await openFromBand($, clock)
+
+    await pane.press({ key: 'pick-list' })
+    expect(await listRow(pane)).toEqual(['english', 'broken', 'code', 'english_1k', 'english_10k'])
+    await pane.press({ key: 'pick-list-broken' })
+
+    expect(world.toasts).toEqual(["couldn't read the list broken: its file is not a word list"])
+    expect(await currentWord(pane)).toMatch(/^eng\d+$/)
+    expect(world.saved.get('settings')).toBeUndefined()
+    await pane.press({ key: 'pick-list' })
+    expect(await listRow(pane)).toEqual(['english', 'code', 'english_1k', 'english_10k'])
   })
 
   test('with one list it opens to nothing else', async ($, on) => {
