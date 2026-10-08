@@ -661,6 +661,16 @@ describe('layout', () => {
     expect(spaceRuns.some(run => run.isInErrorWord)).toBe(false)
   })
 
+  test('words that look alike are one run with their spaces: what is typed, the caret, what is ahead', async () => {
+    const runs = buildVisibleLines(WORDS, ...lineWords('aaa bbb '), 40, 3)[0] ?? []
+
+    expect(runs.map(run => ({ text: run.text, style: run.style }))).toEqual([
+      { text: 'aaa bbb ', style: LETTER_STYLE.correct },
+      { text: 'c', style: LETTER_STYLE.caret },
+      { text: 'cc ddd eee fff ggg ', style: LETTER_STYLE.untyped },
+    ])
+  })
+
   test('big digits: three rows, three cells a digit and one between', async () => {
     const rows = bigNumberRows(40)
 

@@ -10,7 +10,6 @@ export const LETTER_STYLE = {
   untyped: 'untyped',
   /** The next character to type: a letter of the current word, or the space after it once typed out. */
   caret: 'caret',
-  space: 'space',
 } as const
 
 export type LetterStyle = (typeof LETTER_STYLE)[keyof typeof LETTER_STYLE]
@@ -118,11 +117,13 @@ export const buildVisibleLines = (
       const typedWord = place === 'committed' ? (committedWords[index] ?? '') : place === 'current' ? currentWord : ''
       // A typed-out (or too long) current word: the next key is the space, so the caret sits on it.
       const isCaretOnSpace = place === 'current' && currentWord.length >= targetWord.length
+      const letters = wordLetters(targetWord, typedWord, place)
+      // A space looks the same in any style but the caret's, so it takes its word's last letter's: a
+      // run of words that look alike is then one run, one Text. Never underlined, so it ends an error word's run.
+      const lastStyle = letters.at(-1)?.style ?? LETTER_STYLE.untyped
+      const spaceStyle = isCaretOnSpace ? LETTER_STYLE.caret : lastStyle === LETTER_STYLE.caret ? LETTER_STYLE.untyped : lastStyle
 
-      return [
-        ...wordLetters(targetWord, typedWord, place),
-        { text: ' ', style: isCaretOnSpace ? LETTER_STYLE.caret : LETTER_STYLE.space, isInErrorWord: false },
-      ]
+      return [...letters, { text: ' ', style: spaceStyle, isInErrorWord: false }]
     })
 
     return mergeRuns(letters)

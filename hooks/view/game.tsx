@@ -20,14 +20,24 @@ import type { ActiveRound, GameElements } from './shared'
  * dim. A yellow block on the next character is where the next key lands. A word with a mistake is
  * underlined (`isInErrorWord`, added per run): in its letters' colors, as a terminal draws it.
  */
-const letterTextProps = (palette: Palette): Record<LetterStyle, TextProps> => ({
+const letterTextPropsOf = (palette: Palette): Record<LetterStyle, TextProps> => ({
   [LETTER_STYLE.correct]: {},
   [LETTER_STYLE.incorrect]: { color: palette.error },
   [LETTER_STYLE.missed]: { dimColor: true },
   [LETTER_STYLE.untyped]: { dimColor: true },
   [LETTER_STYLE.caret]: { color: palette.warning, inverse: true },
-  [LETTER_STYLE.space]: {},
 })
+
+// The props of the last palette drawn with: made once per theme, not on every draw.
+let letterPropsCache: { readonly palette: Palette; readonly props: Record<LetterStyle, TextProps> } | undefined
+
+const letterTextProps = (palette: Palette): Record<LetterStyle, TextProps> => {
+  if (letterPropsCache?.palette !== palette) {
+    letterPropsCache = { palette, props: letterTextPropsOf(palette) }
+  }
+
+  return letterPropsCache.props
+}
 
 /** Three lines of words in every phase: the first key changes nothing above the field. */
 const WORD_LINE_COUNT = 3
