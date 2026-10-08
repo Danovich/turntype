@@ -292,7 +292,6 @@ export const applyTyped = (
     return { round: finishRound(sampled, ROUND_ENDING.complete), held: tail }
   }
 
-  // A committed word is final: the time to drop the oldest words once there are enough. A change
-  // with keys left out waits for the next word, as the field is replaced first.
-  return { round: tally.didCommit && tail === text ? trimWindow(sampled) : sampled, held: tail }
+  // A committed word is final: the time to drop the oldest words once there are enough.
+  return { round: tally.didCommit ? trimWindow(sampled) : sampled, held: tail }
 }

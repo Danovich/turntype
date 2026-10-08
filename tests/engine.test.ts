@@ -675,7 +675,18 @@ describe('window', () => {
   // Every tenth word mistyped, so the scores are not all correct.
   const typedText = (count: number) => LONG_WORDS.slice(0, count).map((word, index) => (index % 10 === 3 ? `x${word}` : word)).join(' ') + ' '
   const countOf = (words: readonly string[], wanted: string) => words.filter(word => word === wanted).length
-  // A running round holding `text` as committed text, scored as typing would have: typing drops by itself (see "long flow").
+  // A running round of `ready` holding `text` as committed text, scored as typing would have.
+  const holdingOf = (ready: TypingRoundReady, text: string): TypingRoundRunning => {
+    const { typedWords, currentWord } = wordsOf(text)
+
+    return {
+      ...asRunning(typeEvenly(ready, `${ready.targetWords[0] ?? ''} `, 0, 10)),
+      typedWords,
+      currentWord,
+      scored: addScoredWords(EMPTY_SCORED, typedWords, ready.targetWords),
+    }
+  }
+  // The same over LONG_WORDS: typing drops by itself (see "long flow").
   const holding = (text: string): TypingRoundRunning => {
     const { typedWords, currentWord } = wordsOf(text)
 
@@ -767,11 +778,12 @@ describe('long flow', () => {
     expect(calculateResult(windowed, 'complete')).toEqual(calculateResult(whole, 'complete'))
   })
 
-  // At the limit: about 5000 characters of typed words, the window's target words as a JSON array,
-  // and the totals. The field's base is a place, not a second copy of the text.
-  test('3600 words of flow keep the round under 16 KB', async () => {
+  // At the limit: up to 5000 characters of committed words in the window, typed and as targets,
+  // and the totals. Nothing else grows with the test.
+  test('3600 words of flow keep the round under 16 KB; 60 words under 2 KB', async () => {
     const ready = createRound(1, DEFAULT_SETTINGS, [])
     let round: Played = { ...ready, field: firstField(ready) }
+    let sizeAfter60: TypingRound | undefined
     let now = 0
 
     for (let wordIndex = 0; wordIndex < 3600 && round.phase !== 'finished'; wordIndex++) {
@@ -784,11 +796,16 @@ describe('long flow', () => {
         round = play(round, drawnOf(round.field), typed.slice(baseOf(round).length), now)
         now += 200
       }
+      if (wordIndex === 59) {
+        const { field: _sizeField, ...sized } = round
+        sizeAfter60 = sized
+      }
     }
 
     expect(droppedWords(round)).toBeGreaterThan(2500)
     const { field: _field, ...roundAlone } = round
     expect(JSON.stringify(roundAlone).length).toBeLessThan(16_000)
+    expect(JSON.stringify(sizeAfter60).length).toBeLessThan(2000)
   })
 
   test('a key from the field drawn before a drop lands after it, its base moved by the words dropped', async () => {
@@ -797,16 +814,16 @@ describe('long flow', () => {
     const before = asRunning(typeEvenly(READY_LONG, `${typedText(crossing)}${typedWord(crossing)}`, 0, 100))
     expect(droppedWords(before)).toBe(0)
     // That space commits the word and drops the oldest; the old field's next key arrives late.
-    const folded = asRunning(play(before, drawnOf(before.field), `${typedWord(crossing)} `, 600_000))
-    expect(droppedWords(folded)).toBeGreaterThan(0)
+    const afterDrop = asRunning(play(before, drawnOf(before.field), `${typedWord(crossing)} `, 600_000))
+    expect(droppedWords(afterDrop)).toBeGreaterThan(0)
 
     const nextLetter = LONG_WORDS[crossing + 1]?.[0] ?? 'a'
     const late = asRunning(
-      play(folded, drawnOf(before.field), `${typedWord(crossing)} ${nextLetter}`, 600_100),
+      play(afterDrop, drawnOf(before.field), `${typedWord(crossing)} ${nextLetter}`, 600_100),
     )
-    expect(typedOf(late)).toBe(`${typedOf(folded)}${nextLetter}`)
-    expect(late.field.index).toBe(folded.field.index)
-    expect(late.correctKeystrokes).toBe(folded.correctKeystrokes + 1)
+    expect(typedOf(late)).toBe(`${typedOf(afterDrop)}${nextLetter}`)
+    expect(late.field.index).toBe(afterDrop.field.index)
+    expect(late.correctKeystrokes).toBe(afterDrop.correctKeystrokes + 1)
   })
 
   test('the words that left the window count as letter-pair attempts', async () => {
