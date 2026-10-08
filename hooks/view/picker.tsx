@@ -1,6 +1,5 @@
-import type { TypingRound, TypingSettings } from '../../types'
+import type { TypingSettings } from '../../types'
 import { TIME_PRESETS, TYPING_MODE, WORD_PRESETS } from '../engine/settings'
-import { totalTargetWords } from '../engine/window'
 import { wordListLabel, wordListOrder } from '../engine/word-list'
 import type { Palette } from './palette'
 import type { GameElements } from './shared'
@@ -15,7 +14,7 @@ const LIST_ICON = '◍'
 export type OpenOptions = 'list' | 'time' | 'words' | null
 
 export type PickerProps = {
-  /** The settings a pick starts from: also each mode's last count, shown beside it. */
+  /** The settings in use: what the toolbar marks, what a pick starts from, each mode's last count. */
   readonly settings: TypingSettings
   /** Every word list read from `word-lists/`. */
   readonly wordListNames: readonly string[]
@@ -72,47 +71,38 @@ const optionGroup = (
 }
 
 /**
- * ◍ english 1k ❘ ∿ flow  ◷ time (30)  ☰ words (10) — the word list and the modes with their counts.
- * Each group shows its options on a press and closes on a pick: `◍ english 1k  english  5k  10k
- * code`, `◷ time  15  30  60  120`. Flow has none: a press picks it. No hotkeys: keys type, so Tab
- * reaches the buttons. Every item keeps its width: a word never breaks across rows. Only drawn
- * where a test has not started: before the first key, or on the result card.
+ * ◍ english 1k ❘ ∿ flow  ◷ time (30)  ☰ words (10) — the word list and the modes with their counts,
+ * all read from the settings in use: the next test is made from them. Each group shows its options
+ * on a press and closes on a pick: `◍ english 1k  english  5k  10k  code`, `◷ time  15  30  60  120`.
+ * Flow has none: a press picks it. No hotkeys: keys type, so Tab reaches the buttons. Every item
+ * keeps its width: a word never breaks across rows. Only drawn where a test has not started: before
+ * the first key, or on the result card.
  */
-export const settingsPicker = (elements: PickerElements, round: TypingRound, props: PickerProps, actions: PickerActions) => {
+export const settingsPicker = (elements: PickerElements, props: PickerProps, actions: PickerActions) => {
   const { Box, Button, Text } = elements
   const { settings, palette, openOptions, wordListNames } = props
   const choose = (change: Partial<TypingSettings>) => () => actions.onChoose({ ...settings, ...change })
-  const isTimeRound = round.mode === TYPING_MODE.time
-  const isWordsRound = round.mode === TYPING_MODE.words
+  const isTime = settings.mode === TYPING_MODE.time
+  const isWords = settings.mode === TYPING_MODE.words
 
   const listOptions = wordListOrder(wordListNames)
-    .filter(name => name !== round.wordList)
+    .filter(name => name !== settings.wordList)
     .map(name => pickOption(elements, palette, `pick-list-${name}`, wordListLabel(name, wordListNames), false, choose({ wordList: name })))
   const timeOptions = TIME_PRESETS.map(seconds =>
-    pickOption(elements, palette, `pick-time-${seconds}`, String(seconds), isTimeRound && round.timeLimitMs === seconds * 1000, choose({ mode: TYPING_MODE.time, timeSeconds: seconds })),
+    pickOption(elements, palette, `pick-time-${seconds}`, String(seconds), isTime && settings.timeSeconds === seconds, choose({ mode: TYPING_MODE.time, timeSeconds: seconds })),
   )
   const wordsOptions = WORD_PRESETS.map(count =>
-    pickOption(elements, palette, `pick-words-${count}`, String(count), isWordsRound && totalTargetWords(round) === count, choose({ mode: TYPING_MODE.words, wordCount: count })),
+    pickOption(elements, palette, `pick-words-${count}`, String(count), isWords && settings.wordCount === count, choose({ mode: TYPING_MODE.words, wordCount: count })),
   )
-  const timeCount = isTimeRound ? round.timeLimitMs / 1000 : settings.timeSeconds
-  const wordsCount = isWordsRound ? totalTargetWords(round) : settings.wordCount
 
   return (
     <Box flexDirection="row" columnGap={2}>
       <Box flexDirection="row" columnGap={1} flexShrink={0}>
         <Text dimColor>{LIST_ICON}</Text>
-        {optionGroup(
-          elements,
-          'pick-list',
-          fullListLabel(round.wordList),
-          true,
-          openOptions === 'list',
-          () => actions.onToggle('list'),
-          listOptions,
-        )}
+        {optionGroup(elements, 'pick-list', fullListLabel(settings.wordList), true, openOptions === 'list', () => actions.onToggle('list'), listOptions)}
       </Box>
       <Text dimColor>❘</Text>
-      {round.mode === TYPING_MODE.flow ? (
+      {settings.mode === TYPING_MODE.flow ? (
         <Button key="pick-flow" label={`${MODE_ICON.flow} flow`} plain onPress={() => {}} />
       ) : (
         <Button key="pick-flow" label={`${MODE_ICON.flow} flow`} plain dimColor onPress={choose({ mode: TYPING_MODE.flow })} />
@@ -120,8 +110,8 @@ export const settingsPicker = (elements: PickerElements, round: TypingRound, pro
       {optionGroup(
         elements,
         'pick-time',
-        openOptions === 'time' ? `${MODE_ICON.time} time` : `${MODE_ICON.time} time (${timeCount})`,
-        isTimeRound,
+        openOptions === 'time' ? `${MODE_ICON.time} time` : `${MODE_ICON.time} time (${settings.timeSeconds})`,
+        isTime,
         openOptions === 'time',
         () => actions.onToggle('time'),
         timeOptions,
@@ -129,8 +119,8 @@ export const settingsPicker = (elements: PickerElements, round: TypingRound, pro
       {optionGroup(
         elements,
         'pick-words',
-        openOptions === 'words' ? `${MODE_ICON.words} words` : `${MODE_ICON.words} words (${wordsCount})`,
-        isWordsRound,
+        openOptions === 'words' ? `${MODE_ICON.words} words` : `${MODE_ICON.words} words (${settings.wordCount})`,
+        isWords,
         openOptions === 'words',
         () => actions.onToggle('words'),
         wordsOptions,

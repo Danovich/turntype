@@ -40,6 +40,9 @@ const EMPTY_SITE = { type: 'Box', props: {} } as const
 const TURN_DONE = { reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false } as const
 
 /** /type as the person types it in the prompt. */
+/** A session start as an interactive terminal session raises it. */
+const SESSION = { cwd: '/', surface: 'terminal', isInteractive: true } as const
+
 const TYPE_COMMAND = {
   command: 'type',
   args: '',
@@ -405,12 +408,51 @@ describe('probe: picker', () => {
     // Each pick is a new round: flow was r1, then three picks.
     expect(await fieldKey(pane)).toBe('r4-f0')
 
-    expect(world.configWrites).toEqual([
-      { key: 'turntype.mode', value: 'words' },
-      { key: 'turntype.wordCount', value: '50' },
-      { key: 'turntype.mode', value: 'time' },
-      { key: 'turntype.mode', value: 'flow' },
-    ])
+    // Saved as one value in the store, the last pick over the others; /config is never written.
+    expect(world.saved.get('settings')).toEqual({ mode: 'flow', wordCount: 50, timeSeconds: 30, wordList: 'english' })
+    expect(world.configWrites).toEqual([])
+  })
+
+  test('saved picks are in use at the next start, over the /config defaults', { options: { mode: 'time' } }, async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on, { settings: { mode: 'words', wordCount: 50, timeSeconds: 30, wordList: 'english' } })
+    await $.session.start(SESSION)
+    const { pane } = await openFromBand($, clock)
+
+    expect(await pane.find({ type: 'Button', key: 'pick-words' })).toMatchObject({ props: { label: '☰ words (50)' } })
+    expect((await pane.find({ type: 'Button', key: 'pick-words' }))?.props['dimColor']).toBeUndefined()
+  })
+
+  test('a turntype default changed in /config clears the saved picks, so it is the one in use', async ($, on) => {
+    const world = stubWorld(on, { settings: { mode: 'words', wordCount: 50, timeSeconds: 30, wordList: 'english' } })
+    await $.session.start(SESSION)
+
+    await $.config.set({ key: 'turntype.mode', value: 'time', previous: 'flow', origin: { kind: 'composer' }, provider: { plugin: 'engine', tier: 'core' } })
+    expect(world.saved.has('settings')).toBe(false)
+    // The theme is no turntype default: the picks stay.
+    world.saved.set('settings', { mode: 'words', wordCount: 50, timeSeconds: 30, wordList: 'english' })
+    await $.config.set({ key: 'theme', value: 'light', previous: 'dark', origin: { kind: 'composer' }, provider: { plugin: 'engine', tier: 'core' } })
+    expect(world.saved.has('settings')).toBe(true)
+  })
+
+  test('the result card marks what "again" starts: settings changed during the test, not the test played', { options: { mode: 'words', wordCount: '10' } }, async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+
+    // During the test: /type changes the settings; the test in progress keeps its own.
+    await $.command.run({ ...TYPE_COMMAND, args: 'time 60' })
+    for (let index = 1; index < 10; index++) {
+      await typeNextWord(pane)
+    }
+    expect(await isFinished(pane)).toBe(true)
+    expect((await pane.find({ type: 'Button', key: 'pick-time' }))?.props['dimColor']).toBeUndefined()
+    expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { label: '◷ time (60)' } })
+
+    await pane.press({ key: 'again' })
+    await pane.press({ key: 'pick-time' })
+    expect(await pane.find({ type: 'Text', text: /^60$/ })).toMatchObject({ props: { color: 'warning' } })
   })
 
   test('one group open at a time; a press on the open one closes it and changes nothing', async ($, on) => {
@@ -847,7 +889,6 @@ describe('probe: paste guard', () => {
 
 describe('probe: word lists', () => {
   const listFile = (prefix: string, count = 30) => JSON.stringify({ words: Array.from({ length: count }, (_, index) => `${prefix}${index}`) })
-  const SESSION = { cwd: '/', surface: 'terminal', isInteractive: true } as const
 
   test('the lists in word-lists/ load, and the chosen one gives the words', { options: { wordList: 'code' } }, async ($, on) => {
     const clock = mock.clock(on)
@@ -899,7 +940,6 @@ describe('probe: word lists', () => {
 
 describe('probe: toolbar and word list', () => {
   const listFile = (prefix: string) => JSON.stringify({ words: Array.from({ length: 30 }, (_, index) => `${prefix}${index}`) })
-  const SESSION = { cwd: '/', surface: 'terminal', isInteractive: true } as const
 
   const LISTS = () => ({ 'english.json': listFile('eng'), 'english_10k.json': listFile('big'), 'english_1k.json': listFile('mid'), 'code.json': listFile('code') })
   /** The list group's labels in order, as drawn: the toggle, then the lists while open. */
@@ -926,7 +966,8 @@ describe('probe: toolbar and word list', () => {
     await pane.press({ key: 'pick-list-code' })
     expect(await currentWord(pane)).toMatch(/^code\d+$/)
     expect(await listRow(pane)).toEqual(['code'])
-    expect(world.configWrites).toEqual([{ key: 'turntype.wordList', value: 'code' }])
+    expect(world.saved.get('settings')).toMatchObject({ wordList: 'code' })
+    expect(world.configWrites).toEqual([])
 
     await pane.press({ key: 'pick-list' })
     expect(await listRow(pane)).toEqual(['code', 'english', '1k', '10k'])
@@ -991,11 +1032,8 @@ describe('probe: toolbar and word list', () => {
     expect(await listRow(pane)).toEqual(['english 10k'])
     expect(await pane.find({ type: 'Button', key: 'pick-time' })).toMatchObject({ props: { label: '◷ time (60)' } })
     expect((await pane.find({ type: 'Button', key: 'pick-time' }))?.props['dimColor']).toBeUndefined()
-    expect(world.configWrites).toEqual([
-      { key: 'turntype.mode', value: 'time' },
-      { key: 'turntype.timeSeconds', value: '60' },
-      { key: 'turntype.wordList', value: 'english_10k' },
-    ])
+    expect(world.saved.get('settings')).toEqual({ mode: 'time', wordCount: 25, timeSeconds: 60, wordList: 'english_10k' })
+    expect(world.configWrites).toEqual([])
     void clock
   })
 
@@ -1040,7 +1078,6 @@ describe('probe: band text', () => {
 })
 
 describe('probe: theme colors', () => {
-  const SESSION = { cwd: '/', surface: 'terminal', isInteractive: true } as const
   // The count in use, yellow in the open time group.
   const selectedColor = async (pane: PaneHandle) => {
     if ((await pane.find({ key: 'pick-time-15' })) === undefined) {

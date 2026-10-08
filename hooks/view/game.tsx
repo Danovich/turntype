@@ -1,6 +1,6 @@
 import type { Color, TextProps } from 'claude-code'
 
-import type { TypingRoundRunning, TypingSettings } from '../../types'
+import type { TypingRoundRunning } from '../../types'
 import { buildVisibleLines, LETTER_STYLE } from '../engine/layout'
 import type { LetterStyle } from '../engine/layout'
 import { TYPING_MODE } from '../engine/settings'
@@ -9,7 +9,7 @@ import { activeElapsedMs, isIdle } from '../engine/timing'
 import { foldOf } from '../engine/window'
 import type { Palette } from './palette'
 import { settingsPicker } from './picker'
-import type { OpenOptions, PickerActions } from './picker'
+import type { PickerActions, PickerProps } from './picker'
 import { formatClock, ONE_ROW, progressLabel, ROW_GAP } from './shared'
 import type { ActiveRound, GameElements } from './shared'
 
@@ -50,22 +50,17 @@ export type GameViewProps = {
   readonly bodyColumns: number
   readonly isFocused: boolean
   readonly now: number
-  /** The settings a pick in the picker starts from. */
-  readonly settings: TypingSettings
-  /** Every word list read from `word-lists/`. */
-  readonly wordListNames: readonly string[]
-  /** The toolbar group showing its options, if any. */
-  readonly openOptions: OpenOptions
   /** The colors for the person's Claude Code theme. */
   readonly palette: Palette
+  /** The toolbar, drawn before the first key; none once the test runs, so a key reads no settings. */
+  readonly picker: PickerProps | undefined
 }
 
 export type GameActions = {
   /** `fieldBaseDropped`: how much the window had folded when the field was drawn. */
   readonly onInput: (roundId: number, fieldIndex: number, fieldBaseLength: number, fieldBaseDropped: number, text: string) => void
   readonly onFinish: (roundId: number) => void
-  readonly onChoose: (chosen: TypingSettings) => void
-  readonly onToggle: PickerActions['onToggle']
+  readonly picker: PickerActions
 }
 
 /** Green while live wpm is at or over the personal best of this test, yellow under it; none at first. */
@@ -161,16 +156,7 @@ export const gameView = (elements: GameElements, round: ActiveRound, props: Game
         />
         {liveStatus({ Box, Text }, round, props.now, props.palette)}
       </Box>
-      {round.phase === 'ready' ? (
-        settingsPicker(
-          { Box, Button, Text },
-          round,
-          { settings: props.settings, wordListNames: props.wordListNames, palette: props.palette, openOptions: props.openOptions },
-          { onChoose: actions.onChoose, onToggle: actions.onToggle },
-        )
-      ) : (
-        <Text> </Text>
-      )}
+      {props.picker === undefined ? <Text> </Text> : settingsPicker({ Box, Button, Text }, props.picker, actions.picker)}
     </Box>
   )
 }

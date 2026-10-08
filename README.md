@@ -14,11 +14,11 @@ Tested with **Claude Code 2.1.292**. The mods API can change between releases.
 | `words` 10 / 25 / 50 / 100 | You type the last word |
 | `time` 15 / 30 / 60 / 120 | The active time runs out (a pause of more than 3 s does not count) |
 
-Pick a mode in the toolbar under the field before the first key (`◍ english ❘ ∿ flow  ◷ time (30)  ☰ words (25)`, the ones in use bright): press **Tab** to reach it, then Enter, or click. A press on the list, time or words shows its options (`◷ time  15  30  60  120`); a pick closes them and the field takes the keys again. Or name the settings when you open the game: `/type code`, `/type time 30`, `/type words 50 10k` (any order; they are saved). `/config` has them too. With **adaptive words** on (the default), about a third of the words practice the letter pairs you miss most.
+Pick a mode in the toolbar under the field before the first key (`◍ english ❘ ∿ flow  ◷ time (30)  ☰ words (25)`, the ones in use bright): press **Tab** to reach it, then Enter, or click. A press on the list, time or words shows its options (`◷ time  15  30  60  120`); a pick closes them and the field takes the keys again. Or name the settings when you open the game: `/type code`, `/type time 30`, `/type words 50 10k` (any order). Picks are saved for the next session. `/config` holds the starting defaults; changing one there replaces your picks with it. With **adaptive words** on (the default), about a third of the words practice the letter pairs you miss most.
 
 ## Word lists
 
-The words come from JSON files in `word-lists/`: `english` (200 common words), `english_1k`, `english_5k` and `english_10k` (the 1,000, 5,000 and about 10,000 most common words, from [Monkeytype](https://github.com/monkeytypegame/monkeytype)), and `code` (keywords, identifiers and symbols such as `=>` and `?.`). To change the list, open it in the toolbar before you start typing (`◍ english`; open, a size shows as its suffix: `1k`, `5k`, `10k`), run `/type <list>` (`/type code`, `/type 10k`), or set **Word list** in `/config`.
+The words come from JSON files in `word-lists/`: `english` (200 common words), `english_1k`, `english_5k` and `english_10k` (the 1,000, 5,000 and about 10,000 most common words, from [Monkeytype](https://github.com/monkeytypegame/monkeytype)), and `code` (keywords, identifiers and symbols such as `=>` and `?.`). To change the list, open it in the toolbar before you start typing (`◍ english`; open, a size shows as its suffix: `1k`, `5k`, `10k`), run `/type <list>` (`/type code`, `/type 10k`), or set the default **Word list** in `/config`.
 
 To add a list, add a file such as `word-lists/german.json`:
 
@@ -57,7 +57,7 @@ To load the folder for one session: `claude --plugin-dir <path to turntype>`.
 
 ## Data
 
-Results are kept in the mod's own store (`~/.claude/plugins/store/`): personal bests per test, the last 200 fair results, daily totals for 400 days, and the letter-pair statistics. Nothing is sent anywhere.
+Results are kept in the mod's own store (`~/.claude/plugins/store/`): your picks (word list, mode, counts), personal bests per test, the last 200 fair results, daily totals for 400 days, and the letter-pair statistics. Nothing is sent anywhere.
 
 ## Develop
 

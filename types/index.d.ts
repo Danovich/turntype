@@ -1,6 +1,6 @@
 export type TypingMode = 'flow' | 'words' | 'time'
 
-/** What a round is played with, parsed from the manifest's userConfig. */
+/** What a round is played with: the /config defaults (userConfig) under the picks made in the game. */
 export type TypingSettings = {
   readonly mode: TypingMode
   readonly wordCount: number
@@ -10,6 +10,9 @@ export type TypingSettings = {
   /** The name of the word list to pick from: a file in `word-lists/`, without `.json`. */
   readonly wordList: string
 }
+
+/** The settings a pick in the game changes; the rest (adaptive) is /config's alone. */
+export type TypingPicks = Pick<TypingSettings, 'mode' | 'wordCount' | 'timeSeconds' | 'wordList'>
 
 export type TypingCharCounts = {
   readonly correct: number
@@ -147,6 +150,8 @@ export type TypingRound = TypingRoundReady | TypingRoundRunning | TypingRoundFin
 declare module 'claude-code' {
   interface PluginState {
     'turntype': {
+      /** The picks made in the game, as saved in the store; null: none, the /config defaults are in use. */
+      picks: TypingPicks | null
       round: TypingRound | null
       /** Bumped every second while a test runs, so the timer and live wpm redraw. */
       clockTick: number

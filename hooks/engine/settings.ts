@@ -1,6 +1,6 @@
 import type { PluginOptions } from 'claude-code'
 
-import type { TypingMode, TypingSettings } from '../../types'
+import type { TypingMode, TypingPicks, TypingSettings } from '../../types'
 import { DEFAULT_WORD_LIST_NAME, findWordListName, isWordListName } from './word-list'
 
 export const TYPING_MODE = {
@@ -31,7 +31,40 @@ const parseCount = (value: unknown, fallback: number): number => {
   return Number.isInteger(count) && count > 0 ? count : fallback
 }
 
-/** Reads the manifest's userConfig; a missing or odd value falls back to its default. */
+/** The store key of the picks: one value, so a pick is one write. */
+export const PICKED_SETTINGS_KEY = 'settings'
+
+const PICKED_FIELDS = ['mode', 'wordCount', 'timeSeconds', 'wordList'] as const satisfies readonly (keyof TypingPicks)[]
+
+/** The /config rows of the picked fields: a change there resets the picks, so the new default shows. */
+export const PICKED_CONFIG_KEYS = PICKED_FIELDS.map(field => `turntype.${field}`)
+
+/** What a pick saves: the picked fields alone. */
+export const picksOf = (settings: TypingSettings): TypingPicks => ({
+  mode: settings.mode,
+  wordCount: settings.wordCount,
+  timeSeconds: settings.timeSeconds,
+  wordList: settings.wordList,
+})
+
+/** The settings in use: the picks over the /config defaults, or the defaults alone. */
+export const settingsInUse = (defaults: TypingSettings, picks: TypingPicks | null): TypingSettings =>
+  picks === null ? defaults : { ...defaults, ...picks }
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/** Picks read back from the store: null when none are saved; a field missing or odd keeps its default. */
+export const parseSavedPicks = (saved: unknown, defaults: TypingSettings): TypingPicks | null =>
+  isRecord(saved)
+    ? {
+        mode: isTypingMode(saved['mode']) ? saved['mode'] : defaults.mode,
+        wordCount: parseCount(saved['wordCount'], defaults.wordCount),
+        timeSeconds: parseCount(saved['timeSeconds'], defaults.timeSeconds),
+        wordList: typeof saved['wordList'] === 'string' && isWordListName(saved['wordList']) ? saved['wordList'] : defaults.wordList,
+      }
+    : null
+
+/** Reads the manifest's userConfig: the defaults before any pick. A missing or odd value falls back to its own default. */
 export const parseTypingSettings = (options: PluginOptions): TypingSettings => ({
   mode: isTypingMode(options['mode']) ? options['mode'] : DEFAULT_SETTINGS.mode,
   wordCount: parseCount(options['wordCount'], DEFAULT_SETTINGS.wordCount),
