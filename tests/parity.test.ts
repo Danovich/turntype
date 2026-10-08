@@ -81,34 +81,34 @@ const legacy: Side<LegacyRound, LegacyField> = {
 }
 
 type EngineRound = ReturnType<typeof engineRound.createRound> | ReturnType<typeof engineRound.applyFieldInput>
-type EngineField = LegacyField
 
-const engine: Side<EngineRound, EngineField> = {
+/** The words the new engine draws: none before the first key. */
+const engineTyped = (round: EngineRound): readonly [readonly string[], string] =>
+  round.phase === 'ready' ? [[], ''] : [round.typedWords, round.currentWord]
+
+const engine: Side<EngineRound, engineRound.DrawnField> = {
   create: (settings, weak, list) => engineRound.createRound(1, settings, weak, list),
   withWords: (round, words) => ({ ...round, targetWords: words }),
-  field: round => ({
-    key: `f${round.fieldIndex}`,
-    value: round.fieldValue,
-    drawn: { fieldIndex: round.fieldIndex, baseLength: round.fieldBaseLength, dropped: engineWindow.foldOf(round).droppedCharacters },
-  }),
+  field: round => ({ key: `f${round.fieldIndex}`, value: round.fieldValue, drawn: engineRound.drawnField(round) }),
   input: (round, drawn, text, now, words) =>
-    round.phase === 'finished'
-      ? round
-      : engineRound.applyFieldInput(round, drawn.fieldIndex, drawn.baseLength, text, now, { fieldBaseDropped: drawn.dropped, words }),
+    round.phase === 'finished' ? round : engineRound.applyFieldInput(round, drawn, text, now, words),
   finish: round => (round.phase === 'running' ? engineRound.finishByPlayer(round) : round),
   expire: (round, now) => engineRound.expireRound(round, now),
   claudeDone: round => (round.phase === 'running' ? { ...round, isClaudeDone: true } : round),
-  snapshot: (round, now) =>
-    round.phase === 'finished'
-      ? { phase: round.phase, lines: engineLayout.buildVisibleLines(round.targetWords, round.typed, WIDTH, LINES), result: round.result }
+  snapshot: (round, now) => {
+    const lines = engineLayout.buildVisibleLines(round.targetWords, ...engineTyped(round), WIDTH, LINES)
+
+    return round.phase === 'finished'
+      ? { phase: round.phase, lines, result: round.result }
       : round.phase === 'ready'
-        ? { phase: round.phase, lines: engineLayout.buildVisibleLines(round.targetWords, '', WIDTH, LINES) }
+        ? { phase: round.phase, lines }
         : {
             phase: round.phase,
-            lines: engineLayout.buildVisibleLines(round.targetWords, round.typed, WIDTH, LINES),
+            lines,
             liveWpm: engineStats.liveWpm(round, engineTiming.activeElapsedMs(round, now)),
             committed: engineWindow.committedWordCount(round),
-          },
+          }
+  },
 }
 
 /** A small seeded generator (mulberry32): the same seed, the same sequence. */

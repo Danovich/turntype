@@ -3,20 +3,21 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { TypingRound, TypingRoundFinished, TypingRoundReady, TypingRoundRunning } from '../types'
 import { applyProgressChanges, dayStanding, EMPTY_PROGRESS, milestonesReached, parseLegacyProgress, progressChanges, recordResult, sparkline, todayPractice, weakBigrams } from '../hooks/engine/progress'
 import { FALLBACK_WORD_LIST, parseWordList, pickWords, wordListOrder } from '../hooks/engine/word-list'
-import { applyFieldInput, createRound, expireRound, finishByPlayer, finishRound, ROUND_ENDING } from '../hooks/engine/round'
+import { applyFieldInput, createRound, drawnField, ROUND_SHAPE, expireRound, finishByPlayer, finishRound, ROUND_ENDING } from '../hooks/engine/round'
 import { DEFAULT_SETTINGS, parseDailyGoalMinutes, parseSavedPicks, parseTypingSettings, settingsInUse } from '../hooks/engine/settings'
 import { COUNTED_MODES, MODES } from '../hooks/engine/modes'
 import { calculateResult, kogasa, liveWpm } from '../hooks/engine/stats'
 import { activeElapsedMs, isIdle } from '../hooks/engine/timing'
 import { parseTyped } from '../hooks/engine/typed-text'
 import { buildVisibleLines, LETTER_STYLE } from '../hooks/engine/layout'
-import { bandKind, keepsRound, roundAfter } from '../hooks/engine/lifecycle'
+import { bandKind, keepsRound, readableRound, roundAfter } from '../hooks/engine/lifecycle'
 import { bigNumberRows } from '../hooks/engine/big-digits'
 import { resultToast } from '../hooks/view/shared'
 import { EMPTY_FOLD, foldWindow } from '../hooks/engine/window'
 import { scoreWord, totalSamples } from '../hooks/engine/stats'
 
 const READY: TypingRoundReady = {
+  shape: ROUND_SHAPE,
   roundId: 1,
   mode: 'flow',
   count: undefined,
@@ -24,7 +25,8 @@ const READY: TypingRoundReady = {
   targetWords: ['the', 'quick', 'brown', 'fox', 'jumps', 'over', 'lazy', 'dog'],
   isClaudeDone: false,
   fieldIndex: 0,
-  fieldBaseLength: 0,
+  fieldBaseWords: 0,
+  fieldBasePartial: 0,
   fieldValue: '',
   focusBigrams: [],
   pbWpm: undefined,
@@ -33,6 +35,27 @@ const READY: TypingRoundReady = {
 
 /** Two words with "ck" among 52, as in real English: practice can find them, chance rarely does. */
 const ENGLISH_SAMPLE = [...FALLBACK_WORD_LIST.words, 'quick', 'black']
+
+/** The first field of a round, as drawn before the first key. */
+const FIRST_FIELD = drawnField(READY)
+
+/** The typed text a round holds, as one string: each committed word with its space, then the current word. */
+const typedOf = (round: TypingRound): string =>
+  round.phase === 'ready' ? '' : round.typedWords.map(word => `${word} `).join('') + round.currentWord
+
+/** The typed text before the round's current field: what the field's base covers. */
+const baseOf = (round: TypingRound): string => {
+  const words = round.phase === 'ready' ? [] : round.typedWords.slice(0, round.fieldBaseWords)
+
+  return typedOf(round).slice(0, words.reduce((sum, word) => sum + word.length + 1, 0) + round.fieldBasePartial)
+}
+
+/** A typed text as a round holds it: the committed words and the current one. */
+const wordsOf = (text: string) => {
+  const { committedWords, currentWord } = parseTyped(text)
+
+  return { typedWords: committedWords, currentWord }
+}
 
 const asRunning = (round: ReturnType<typeof applyFieldInput>): TypingRoundRunning => {
   if (round.phase !== 'running') {
@@ -56,19 +79,19 @@ const typeEvenly = (
     if (current.phase === 'finished') {
       return current
     }
-    const typed = (current.phase === 'running' ? current.typed : '') + text[index]
+    const typed = typedOf(current) + text[index]
 
-    return applyFieldInput(current, current.fieldIndex, current.fieldBaseLength, typed.slice(current.fieldBaseLength), startMs + index * intervalMs)
+    return applyFieldInput(current, drawnField(current), typed.slice(baseOf(current).length), startMs + index * intervalMs)
   }, round)
 
 describe('engine', () => {
   test('spaces before a word open a fresh field: the round and the typed text do not change', async () => {
-    const afterSpace = applyFieldInput(READY, 0, 0, '  ', 0)
+    const afterSpace = applyFieldInput(READY, FIRST_FIELD, '  ', 0)
     expect(afterSpace).toEqual({ ...READY, fieldIndex: 1 })
 
-    const running = asRunning(applyFieldInput(READY, 0, 0, 'the ', 0))
-    const afterExtraSpace = asRunning(applyFieldInput(running, running.fieldIndex, running.fieldBaseLength, ' ', 100))
-    expect(afterExtraSpace.typed).toBe('the ')
+    const running = asRunning(applyFieldInput(READY, FIRST_FIELD, 'the ', 0))
+    const afterExtraSpace = asRunning(applyFieldInput(running, drawnField(running), ' ', 100))
+    expect(typedOf(afterExtraSpace)).toBe('the ')
     expect(afterExtraSpace.fieldIndex).toBe(running.fieldIndex + 1)
     expect(afterExtraSpace.correctKeystrokes).toBe(running.correctKeystrokes)
   })
@@ -79,66 +102,66 @@ describe('engine', () => {
     expect(full.fieldValue).toBe('')
 
     // A fourth letter: not typed, not scored; the field (it shows the letter) is replaced by one holding "the".
-    const cut = asRunning(applyFieldInput(full, full.fieldIndex, full.fieldBaseLength, 'thex', 400))
-    expect(cut.typed).toBe('the')
+    const cut = asRunning(applyFieldInput(full, drawnField(full), 'thex', 400))
+    expect(typedOf(cut)).toBe('the')
     expect(cut.correctKeystrokes).toBe(3)
     expect(cut.incorrectKeystrokes).toBe(0)
     expect(cut.fieldIndex).toBe(full.fieldIndex + 1)
     expect(cut.fieldValue).toBe('the')
 
     // A late key in the replaced field is not taken: the new field already holds text.
-    expect(applyFieldInput(cut, full.fieldIndex, full.fieldBaseLength, 'thexy', 450)).toBe(cut)
+    expect(applyFieldInput(cut, drawnField(full), 'thexy', 450)).toBe(cut)
 
     // In the new field a backspace edits as usual, and the field keeps its starting text.
-    const edited = asRunning(applyFieldInput(cut, cut.fieldIndex, cut.fieldBaseLength, 'th', 500))
-    expect(edited.typed).toBe('th')
+    const edited = asRunning(applyFieldInput(cut, drawnField(cut), 'th', 500))
+    expect(typedOf(edited)).toBe('th')
     expect(edited.fieldIndex).toBe(cut.fieldIndex)
     expect(edited.fieldValue).toBe('the')
 
     // Typed out again, a space commits the word as correct, and the next field starts empty.
-    const committed = asRunning(applyFieldInput(edited, edited.fieldIndex, edited.fieldBaseLength, 'the ', 600))
-    expect(committed.typed).toBe('the ')
+    const committed = asRunning(applyFieldInput(edited, drawnField(edited), 'the ', 600))
+    expect(typedOf(committed)).toBe('the ')
     expect(committed.fieldValue).toBe('')
-    expect(parseTyped(committed.typed).committedWords).toEqual(['the'])
+    expect(committed.typedWords).toEqual(['the'])
   })
 
   test('a space opens a fresh field whose base is the committed text', async () => {
-    const round = asRunning(applyFieldInput(READY, 0, 0, 'the ', 1000))
+    const round = asRunning(applyFieldInput(READY, FIRST_FIELD, 'the ', 1000))
 
     expect(round.fieldIndex).toBe(1)
-    expect(round.typed.slice(0, round.fieldBaseLength)).toBe('the ')
+    expect(baseOf(round)).toBe('the ')
     expect(round.correctKeystrokes).toBe(4)
   })
 
   test('fast typing across a space: a late key in the old field is kept, then the new field continues', async () => {
-    const afterSpace = asRunning(applyFieldInput(READY, 0, 0, 'the ', 1000))
+    const afterSpace = asRunning(applyFieldInput(READY, FIRST_FIELD, 'the ', 1000))
     // The "q" landed in field 0 before the redraw replaced it with field 1.
-    const lateKey = asRunning(applyFieldInput(afterSpace, 0, 0, 'the q', 1050))
+    const lateKey = asRunning(applyFieldInput(afterSpace, FIRST_FIELD, 'the q', 1050))
 
-    expect(lateKey.typed).toBe('the q')
+    expect(typedOf(lateKey)).toBe('the q')
     expect(lateKey.fieldIndex).toBe(1)
-    expect(lateKey.typed.slice(0, lateKey.fieldBaseLength)).toBe('the q')
+    expect(baseOf(lateKey)).toBe('the q')
 
     // Field 1 started empty and holds only what came after the late key.
-    const continued = asRunning(applyFieldInput(lateKey, 1, lateKey.fieldBaseLength, 'uick ', 1300))
+    const continued = asRunning(applyFieldInput(lateKey, drawnField(lateKey), 'uick ', 1300))
 
-    expect(continued.typed).toBe('the quick ')
+    expect(typedOf(continued)).toBe('the quick ')
     expect(continued.fieldIndex).toBe(2)
     expect(continued.incorrectKeystrokes).toBe(0)
   })
 
   test('a late key from an old field is dropped once the new field has text', async () => {
-    const afterSpace = asRunning(applyFieldInput(READY, 0, 0, 'the ', 1000))
-    const newField = asRunning(applyFieldInput(afterSpace, 1, 4, 'q', 1100))
-    const stale = applyFieldInput(newField, 0, 0, 'the x', 1150)
+    const afterSpace = asRunning(applyFieldInput(READY, FIRST_FIELD, 'the ', 1000))
+    const newField = asRunning(applyFieldInput(afterSpace, drawnField(afterSpace), 'q', 1100))
+    const stale = applyFieldInput(newField, FIRST_FIELD, 'the x', 1150)
 
     expect(stale).toBe(newField)
   })
 
   test('accuracy counts a typo even after it is fixed', async () => {
-    const typo = asRunning(applyFieldInput(READY, 0, 0, 'tg', 1000))
-    const fixed = asRunning(applyFieldInput(typo, 0, 0, 't', 1100))
-    const done = asRunning(applyFieldInput(fixed, 0, 0, 'the ', 1500))
+    const typo = asRunning(applyFieldInput(READY, FIRST_FIELD, 'tg', 1000))
+    const fixed = asRunning(applyFieldInput(typo, FIRST_FIELD, 't', 1100))
+    const done = asRunning(applyFieldInput(fixed, FIRST_FIELD, 'the ', 1500))
     const { result } = finishRound(done, ROUND_ENDING.complete)
 
     // t✓ g✗ (backspace is not a keystroke) h✓ e✓ space✓ → 4 of 5.
@@ -161,9 +184,9 @@ describe('engine', () => {
   })
 
   test('pause: of a 60 s gap only 3 s count, so the break leaves wpm and the samples alone', async () => {
-    const started = asRunning(applyFieldInput(READY, 0, 0, 't', 0))
-    const beforeBreak = asRunning(applyFieldInput(started, 0, 0, 'the ', 3000))
-    const afterBreak = asRunning(applyFieldInput(beforeBreak, 1, 4, 'quick ', 66_000))
+    const started = asRunning(applyFieldInput(READY, FIRST_FIELD, 't', 0))
+    const beforeBreak = asRunning(applyFieldInput(started, FIRST_FIELD, 'the ', 3000))
+    const afterBreak = asRunning(applyFieldInput(beforeBreak, drawnField(beforeBreak), 'quick ', 66_000))
 
     expect(afterBreak.pausedMs).toBe(60_000)
     // Active time is 6 s, so the samples span 7 active seconds, not 67 wall seconds.
@@ -173,7 +196,7 @@ describe('engine', () => {
   })
 
   test('the clock stops while idle', async () => {
-    const started = asRunning(applyFieldInput(READY, 0, 0, 't', 1000))
+    const started = asRunning(applyFieldInput(READY, FIRST_FIELD, 't', 1000))
 
     expect(isIdle(started, 3500)).toBe(false)
     expect(isIdle(started, 4500)).toBe(true)
@@ -195,7 +218,7 @@ describe('engine', () => {
       expect(expired.result.wpm).toBe(5)
     }
     // A key that arrives after the time is up ends the test without counting.
-    expect(applyFieldInput(nearEnd, nearEnd.fieldIndex, nearEnd.fieldBaseLength, 'qui', 15_800).phase).toBe('finished')
+    expect(applyFieldInput(nearEnd, drawnField(nearEnd), 'qui', 15_800).phase).toBe('finished')
   })
 
   test('time mode ended early with Enter: measured over the active time, not the limit', async () => {
@@ -209,12 +232,12 @@ describe('engine', () => {
   })
 
   test('live wpm reads the running counter; a deletion that removes a space counts again', async () => {
-    const typed = asRunning(applyFieldInput(READY, 0, 0, 'the quick ', 0))
+    const typed = asRunning(applyFieldInput(READY, FIRST_FIELD, 'the quick ', 0))
 
     expect(typed.correctWordCharacters).toBe(10)
     expect(liveWpm(typed, 6000)).toBe(20)
 
-    const withoutSpace = asRunning(applyFieldInput(typed, 0, 0, 'the quick', 1000))
+    const withoutSpace = asRunning(applyFieldInput(typed, FIRST_FIELD, 'the quick', 1000))
     expect(withoutSpace.correctWordCharacters).toBe(4)
   })
 
@@ -261,7 +284,8 @@ const finished = (overrides: Partial<TypingRoundFinished['result']>, round: Part
   mode: 'time',
   count: 30,
   phase: 'finished',
-  typed: '',
+  typedWords: [],
+  currentWord: '',
   ending: 'timeUp',
   bigramErrors: {},
   hasPastedText: false,
@@ -282,11 +306,11 @@ const finished = (overrides: Partial<TypingRoundFinished['result']>, round: Part
 
 describe('paste guard', () => {
   test('a change that adds more than a burst of keys marks the test as pasted; key by key does not', async () => {
-    expect(asRunning(applyFieldInput(READY, 0, 0, 'the', 0)).hasPastedText).toBe(false)
-    expect(asRunning(applyFieldInput(READY, 0, 0, 'the ', 0)).hasPastedText).toBe(true)
+    expect(asRunning(applyFieldInput(READY, FIRST_FIELD, 'the', 0)).hasPastedText).toBe(false)
+    expect(asRunning(applyFieldInput(READY, FIRST_FIELD, 'the ', 0)).hasPastedText).toBe(true)
     expect(asRunning(typeEvenly(READY, 'the quick brown ', 0, 100)).hasPastedText).toBe(false)
 
-    const pasted = asRunning(applyFieldInput(READY, 0, 0, 'the ', 0))
+    const pasted = asRunning(applyFieldInput(READY, FIRST_FIELD, 'the ', 0))
     expect(finishByPlayer(pasted).hasPastedText).toBe(true)
   })
 
@@ -442,7 +466,7 @@ describe('progress', () => {
 describe('adaptive words', () => {
   test('a wrong key records the letter pair the player meant; a first letter has no pair', async () => {
     // "tge": "g" for the "h" of "th"; then "x" for the "t" of "quick" has no pair before it.
-    const typed = asRunning(applyFieldInput(READY, 0, 0, 'tge x', 1000))
+    const typed = asRunning(applyFieldInput(READY, FIRST_FIELD, 'tge x', 1000))
 
     expect(typed.bigramErrors).toEqual({ th: 1 })
     expect(finishRound(typed, ROUND_ENDING.complete).bigramErrors).toEqual({ th: 1 })
@@ -454,8 +478,8 @@ describe('adaptive words', () => {
     expect(slipped.bigramErrors).toEqual({ qu: 1 })
 
     // Back to "q" with backspace, then "i" for the "u" again: on track, so it counts.
-    const corrected = asRunning(applyFieldInput(slipped, slipped.fieldIndex, slipped.fieldBaseLength, 'q', 2000))
-    const slippedAgain = asRunning(applyFieldInput(corrected, corrected.fieldIndex, corrected.fieldBaseLength, 'qi', 2100))
+    const corrected = asRunning(applyFieldInput(slipped, drawnField(slipped), 'q', 2000))
+    const slippedAgain = asRunning(applyFieldInput(corrected, drawnField(corrected), 'qi', 2100))
     expect(slippedAgain.bigramErrors).toEqual({ qu: 2 })
   })
 
@@ -465,7 +489,7 @@ describe('adaptive words', () => {
     const practiceRound = (index: number) =>
       finished(
         { wordCount: 3 },
-        { typed: 'the the the', targetWords: ['the', 'the', 'the'], bigramErrors: index % 2 === 0 ? { th: 1 } : {} },
+        { ...wordsOf('the the the'), targetWords: ['the', 'the', 'the'], bigramErrors: index % 2 === 0 ? { th: 1 } : {} },
       )
     const practiced = Array.from({ length: 20 }, (_, index) => index).reduce(
       (progress, index) => recordResult(progress, practiceRound(index), DAY_ONE_NOON + index).progress,
@@ -475,7 +499,7 @@ describe('adaptive words', () => {
     expect(weakBigrams(practiced)).toEqual(['th'])
 
     // Twenty clean runs later the old misses weigh too little to count.
-    const cleanRound = finished({ wordCount: 3 }, { typed: 'the the the', targetWords: ['the', 'the', 'the'] })
+    const cleanRound = finished({ wordCount: 3 }, { ...wordsOf('the the the'), targetWords: ['the', 'the', 'the'] })
     const recovered = Array.from({ length: 20 }, (_, index) => index).reduce(
       (progress, index) => recordResult(progress, cleanRound, DAY_ONE_NOON + 100 + index).progress,
       practiced,
@@ -494,8 +518,16 @@ describe('adaptive words', () => {
 })
 
 describe('round lifecycle', () => {
-  const running = () => asRunning(applyFieldInput(READY, 0, 0, 't', 0))
+  const running = () => asRunning(applyFieldInput(READY, FIRST_FIELD, 't', 0))
   const finished = () => finishByPlayer(running())
+
+  test('a round kept over a reload stays only in the shape this version reads', async () => {
+    const round = running()
+
+    expect(readableRound(round)).toBe(round)
+    expect(readableRound({ ...round, shape: ROUND_SHAPE - 1 })).toBeNull()
+    expect(readableRound(null)).toBeNull()
+  })
 
   test('a turn ends: a test in progress learns Claude is done; an untouched round stays only in an open game', async () => {
     expect(roundAfter(running(), { kind: 'turnComplete', isGameOpen: false })).toMatchObject({ phase: 'running', isClaudeDone: true })
@@ -545,8 +577,13 @@ describe('word list order', () => {
 describe('layout', () => {
   // Each word is 4 cells with its space, so a width of 8 holds two words a line.
   const WORDS = ['aaa', 'bbb', 'ccc', 'ddd', 'eee', 'fff', 'ggg']
+  const lineWords = (typed: string) => {
+    const { typedWords, currentWord } = wordsOf(typed)
+
+    return [typedWords, currentWord] as const
+  }
   const lineTexts = (typed: string) =>
-    buildVisibleLines(WORDS, typed, 8, 3).map(line => line.map(run => run.text).join('').trim())
+    buildVisibleLines(WORDS, ...lineWords(typed), 8, 3).map(line => line.map(run => run.text).join('').trim())
 
   test('always three lines: the end of the text is padded, so the pane never changes height', async () => {
     expect(lineTexts('aaa bbb ccc ddd eee ')).toEqual(['ccc ddd', 'eee fff', 'ggg'])
@@ -561,7 +598,7 @@ describe('layout', () => {
 
   // The run that holds the caret, by style: where the next key lands.
   const caretRuns = (typed: string) =>
-    buildVisibleLines(WORDS, typed, 8, 3)
+    buildVisibleLines(WORDS, ...lineWords(typed), 8, 3)
       .flat()
       .filter(run => run.style === LETTER_STYLE.caret)
       .map(run => ({ text: run.text, style: run.style }))
@@ -577,7 +614,7 @@ describe('layout', () => {
 
   // The styles of one word's letters on show, by the word's position in WORDS.
   const wordStyles = (typed: string, wordIndex: number) =>
-    buildVisibleLines(WORDS, typed, 8, 3)
+    buildVisibleLines(WORDS, ...lineWords(typed), 8, 3)
       .flat()
       .flatMap(run => [...run.text].map(() => run.style))
       .filter((_, cell) => Math.floor(cell / 4) === wordIndex % 2 && cell % 4 < 3)
@@ -591,7 +628,7 @@ describe('layout', () => {
 
   // Each word's underline, by the word's position in WORDS (each is 3 letters and a space).
   const errorWords = (typed: string) =>
-    buildVisibleLines(WORDS, typed, 8, 3)
+    buildVisibleLines(WORDS, ...lineWords(typed), 8, 3)
       .flat()
       .flatMap(run => [...run.text].map(() => run.isInErrorWord))
       .filter((_, cell) => cell % 4 < 3)
@@ -603,7 +640,7 @@ describe('layout', () => {
     // The current word slips: underlined at once.
     expect(errorWords('aaa bx').slice(0, 2)).toEqual([false, true])
     // The space after a word with a mistake is drawn without the underline.
-    const spaceRuns = buildVisibleLines(WORDS, 'axa ', 8, 3).flat().filter(run => run.text.trim() === '')
+    const spaceRuns = buildVisibleLines(WORDS, ...lineWords('axa '), 8, 3).flat().filter(run => run.text.trim() === '')
     expect(spaceRuns.length).toBeGreaterThan(0)
     expect(spaceRuns.some(run => run.isInErrorWord)).toBe(false)
   })
@@ -638,12 +675,16 @@ describe('window', () => {
       { correct: 0, incorrect: 0, extra: 0, missed: 0, correctWordCharacters: 0 },
     )
   // A running round holding `text` as committed text: typing folds by itself (see "long flow").
-  const holding = (text: string): TypingRoundRunning => ({ ...asRunning(typeEvenly(READY_LONG, 'alpha ', 0, 10)), typed: text, fieldBaseLength: text.length })
+  const holding = (text: string): TypingRoundRunning => {
+    const { typedWords, currentWord } = wordsOf(text)
+
+    return { ...asRunning(typeEvenly(READY_LONG, 'alpha ', 0, 10)), typedWords, currentWord, fieldBaseWords: typedWords.length, fieldBasePartial: currentWord.length }
+  }
 
   test('up to 5000 characters of committed text the round is returned as it is', async () => {
     const running = holding(typedText(900))
 
-    expect(running.fieldBaseLength).toBeLessThanOrEqual(5000)
+    expect(typedOf(running).length).toBeLessThanOrEqual(5000)
     expect(foldWindow(running)).toBe(running)
   })
 
@@ -652,17 +693,17 @@ describe('window', () => {
     const folded = foldWindow(running)
     const foldedWords = folded.fold.words
 
-    expect(running.fieldBaseLength).toBeGreaterThan(5000)
-    expect(folded.typed.length).toBeGreaterThanOrEqual(2500)
+    expect(typedOf(running).length).toBeGreaterThan(5000)
+    expect(typedOf(folded).length).toBeGreaterThanOrEqual(2500)
     // At most one more word could have folded: "xalpha " is the longest.
-    expect(folded.typed.length).toBeLessThan(2500 + 'xalpha '.length)
+    expect(typedOf(folded).length).toBeLessThan(2500 + 'xalpha '.length)
     expect(folded.targetWords[0]).toBe(LONG_WORDS[foldedWords])
-    expect(parseTyped(folded.typed).committedWords.length).toBe(1300 - foldedWords)
-    expect(folded.typed).toBe(running.typed.slice(folded.fold.droppedCharacters))
-    expect(folded.fieldBaseLength).toBe(running.fieldBaseLength - folded.fold.droppedCharacters)
+    expect(parseTyped(typedOf(folded)).committedWords.length).toBe(1300 - foldedWords)
+    expect(typedOf(folded)).toBe(typedOf(running).slice(folded.fold.droppedCharacters))
+    expect(folded.fieldBaseWords).toBe(running.fieldBaseWords - foldedWords)
 
-    const whole = sumScores(running.typed, running.targetWords)
-    const window = sumScores(folded.typed, folded.targetWords)
+    const whole = sumScores(typedOf(running), running.targetWords)
+    const window = sumScores(typedOf(folded), folded.targetWords)
     expect({
       correct: folded.fold.chars.correct + window.correct,
       incorrect: folded.fold.chars.incorrect + window.incorrect,
@@ -673,16 +714,6 @@ describe('window', () => {
     // Each folded target counts its pairs once: "al" once per "alpha", "be" once per "be".
     const foldedTargets = LONG_WORDS.slice(0, foldedWords)
     expect(folded.fold.bigramAttempts).toMatchObject({ al: countOf(foldedTargets, 'alpha'), be: countOf(foldedTargets, 'be') })
-  })
-
-  test('repeated spaces leave with the words they follow', async () => {
-    const words = LONG_WORDS.slice(0, 1300)
-    const typed = `  ${words.join('  ')}  `
-    const folded = foldWindow(holding(typed))
-
-    expect(folded.fold.words).toBeGreaterThan(0)
-    expect(folded.typed.split(/ +/).find(word => word !== '')).toBe(words[folded.fold.words])
-    expect(folded.typed.length + folded.fold.droppedCharacters).toBe(typed.length)
   })
 
   test('old per-second samples fold into totals with the same mean and spread', async () => {
@@ -709,32 +740,31 @@ describe('long flow', () => {
     const allSamples = Array.from({ length: Math.ceil(text.length / 10) }, (_, second) => Math.min(10, text.length - second * 10))
     const whole: TypingRoundRunning = {
       ...windowed,
-      typed: text,
-      fieldBaseLength: text.length,
+      ...wordsOf(text),
       targetWords: LONG_WORDS,
       keystrokesPerSecond: allSamples,
       fold: EMPTY_FOLD,
     }
 
     expect(windowed.fold.words).toBeGreaterThan(2000)
-    expect(windowed.fieldBaseLength).toBeLessThanOrEqual(5000)
+    expect(baseOf(windowed).length).toBeLessThanOrEqual(5000)
     expect(calculateResult(windowed, 'complete')).toEqual(calculateResult(whole, 'complete'))
   })
 
   // At the limit: about 5000 characters of typed text, the window's target words as a JSON array,
-  // and the folded totals. The field's base is a length, not a second copy of the text.
+  // and the folded totals. The field's base is a place, not a second copy of the text.
   test('3600 words of flow keep the round under 16 KB', async () => {
     let round: TypingRound = createRound(1, DEFAULT_SETTINGS, [])
     let now = 0
 
     for (let wordIndex = 0; wordIndex < 3600 && round.phase !== 'finished'; wordIndex++) {
-      const word = round.targetWords[parseTyped(round.phase === 'running' ? round.typed : '').committedWords.length] ?? 'x'
+      const word = round.targetWords[round.phase === 'running' ? round.typedWords.length : 0] ?? 'x'
       for (const character of `${word} `) {
         if (round.phase === 'finished') {
           break
         }
-        const typed = (round.phase === 'running' ? round.typed : '') + character
-        round = applyFieldInput(round, round.fieldIndex, round.fieldBaseLength, typed.slice(round.fieldBaseLength), now)
+        const typed = typedOf(round) + character
+        round = applyFieldInput(round, drawnField(round), typed.slice(baseOf(round).length), now)
         now += 200
       }
     }
@@ -749,16 +779,14 @@ describe('long flow', () => {
     const before = asRunning(typeEvenly(READY_LONG, `${typedText(crossing)}${typedWord(crossing)}`, 0, 100))
     expect(before.fold.words).toBe(0)
     // That space commits the word and folds; the old field's next key arrives late.
-    const folded = asRunning(applyFieldInput(before, before.fieldIndex, before.fieldBaseLength, `${typedWord(crossing)} `, 600_000))
+    const folded = asRunning(applyFieldInput(before, drawnField(before), `${typedWord(crossing)} `, 600_000))
     expect(folded.fold.words).toBeGreaterThan(0)
 
     const nextLetter = LONG_WORDS[crossing + 1]?.[0] ?? 'a'
     const late = asRunning(
-      applyFieldInput(folded, before.fieldIndex, before.fieldBaseLength, `${typedWord(crossing)} ${nextLetter}`, 600_100, {
-        fieldBaseDropped: before.fold.droppedCharacters,
-      }),
+      applyFieldInput(folded, drawnField(before), `${typedWord(crossing)} ${nextLetter}`, 600_100),
     )
-    expect(late.typed).toBe(`${folded.typed}${nextLetter}`)
+    expect(typedOf(late)).toBe(`${typedOf(folded)}${nextLetter}`)
     expect(late.fieldIndex).toBe(folded.fieldIndex)
     expect(late.correctKeystrokes).toBe(folded.correctKeystrokes + 1)
   })
@@ -811,7 +839,7 @@ describe('word lists', () => {
       (current, _, index) =>
         current.phase === 'finished'
           ? current
-          : applyFieldInput(current, current.fieldIndex, current.fieldBaseLength, text.slice(current.fieldBaseLength, index + 1), index * 100, { words: codeList }),
+          : applyFieldInput(current, drawnField(current), text.slice(baseOf(current).length, index + 1), index * 100, codeList),
       ready,
     )
 

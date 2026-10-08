@@ -4,9 +4,10 @@ import type { TypingRoundRunning } from '../../types'
 import { buildVisibleLines, LETTER_STYLE } from '../engine/layout'
 import type { LetterStyle } from '../engine/layout'
 import { MODES } from '../engine/modes'
+import { drawnField } from '../engine/round'
+import type { DrawnField } from '../engine/round'
 import { liveWpm } from '../engine/stats'
 import { activeElapsedMs, isIdle, timeLimitMs } from '../engine/timing'
-import { foldOf } from '../engine/window'
 import type { Palette } from './palette'
 import { settingsPicker } from './picker'
 import type { PickerActions, PickerProps } from './picker'
@@ -52,14 +53,8 @@ export type GameViewProps = {
   readonly picker: PickerProps | undefined
 }
 
-/** Where a field drew its text from: its round, its index, and its base as drawn. */
-export type FieldAsDrawn = {
-  readonly roundId: number
-  readonly fieldIndex: number
-  readonly fieldBaseLength: number
-  /** How much the window had folded when the field was drawn. */
-  readonly fieldBaseDropped: number
-}
+/** Where a field drew its text from: its round, and the field as drawn (its index and base). */
+export type FieldAsDrawn = { readonly roundId: number; readonly field: DrawnField }
 
 export type GameActions = {
   readonly onInput: (field: FieldAsDrawn, text: string) => void
@@ -131,10 +126,10 @@ const liveStatus = ({ Box, Text }: Pick<GameElements, 'Box' | 'Text'>, round: Ac
  */
 export const gameView = (elements: GameElements, round: ActiveRound, props: GameViewProps, actions: GameActions) => {
   const { Box, Button, Input, Text } = elements
-  const typed = round.phase === 'running' ? round.typed : ''
-  const lines = buildVisibleLines(round.targetWords, typed, props.bodyColumns, WORD_LINE_COUNT)
+  const [typedWords, currentWord] = round.phase === 'running' ? [round.typedWords, round.currentWord] : [[], '']
+  const lines = buildVisibleLines(round.targetWords, typedWords, currentWord, props.bodyColumns, WORD_LINE_COUNT)
   const { roundId, fieldIndex } = round
-  const field: FieldAsDrawn = { roundId, fieldIndex, fieldBaseLength: round.fieldBaseLength, fieldBaseDropped: foldOf(round).droppedCharacters }
+  const field: FieldAsDrawn = { roundId, field: drawnField(round) }
   const letterProps = letterTextProps(props.palette)
 
   return (

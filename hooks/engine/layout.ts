@@ -1,5 +1,3 @@
-import { parseTyped } from './typed-text'
-
 /**
  * The words row shows only the target text: a letter's style says how it was typed,
  * never what was typed (the input field shows that).
@@ -86,11 +84,11 @@ const mergeRuns = (letters: readonly LetterRun[]): VisibleLine => {
  */
 export const buildVisibleLines = (
   targetWords: readonly string[],
-  typed: string,
+  committedWords: readonly string[],
+  currentWord: string,
   width: number,
   lineCount: number,
 ): readonly VisibleLine[] => {
-  const { committedWords, currentWord } = parseTyped(typed)
   const currentIndex = committedWords.length
   const placeOf = (index: number): WordPlace => (index < currentIndex ? 'committed' : index === currentIndex ? 'current' : 'ahead')
 

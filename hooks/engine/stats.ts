@@ -1,7 +1,6 @@
 import type { TypingCharCounts, TypingResult, TypingRoundEnding, TypingRoundRunning, TypingSampleTotals } from '../../types'
 
 import { timeLimitMs } from './timing'
-import { parseTyped } from './typed-text'
 
 const MIN_DURATION_MS = 1000
 const CHARACTERS_PER_WORD = 5
@@ -75,8 +74,8 @@ export const scoreWord = (typedWord: string, targetWord: string, isCommitted: bo
 }
 
 /** Characters of the correctly committed words in the window, with their spaces. O(window): only after a deletion. */
-export const countCorrectWordCharacters = (typed: string, targetWords: readonly string[]): number =>
-  parseTyped(typed).committedWords.reduce(
+export const countCorrectWordCharacters = (typedWords: readonly string[], targetWords: readonly string[]): number =>
+  typedWords.reduce(
     (sum, typedWord, index) => sum + (typedWord === targetWords[index] ? typedWord.length + 1 : 0),
     0,
   )
@@ -97,7 +96,7 @@ export const liveWpm = (round: TypingRoundRunning, activeMs: number): number =>
 /** The result of the whole test: the window scored now, plus what the window folded away, scored when folded. */
 export const calculateResult = (round: TypingRoundRunning, ending: TypingRoundEnding): TypingResult => {
   const { fold } = round
-  const { committedWords, currentWord } = parseTyped(round.typed)
+  const { typedWords: committedWords, currentWord } = round
   const committedScores = committedWords.map((typedWord, index) =>
     scoreWord(typedWord, round.targetWords[index] ?? '', true),
   )

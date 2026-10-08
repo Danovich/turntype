@@ -3,7 +3,6 @@ import type { TypingDayStanding, TypingPbOutcome, TypingProgressSummary, TypingR
 import { MODES } from './modes'
 import { ROUND_ENDING } from './round'
 import { mean } from './stats'
-import { parseTyped } from './typed-text'
 import { addBigramAttempts } from './window'
 
 /**
@@ -174,7 +173,7 @@ const roundToHundredths = (value: number): number => Math.round(value * 100) / 1
 
 /** The target text the player reached in the window: committed words whole, the current one as far as typed. */
 const reachedText = (round: TypingRoundFinished): readonly string[] => {
-  const { committedWords, currentWord } = parseTyped(round.typed)
+  const { typedWords: committedWords, currentWord } = round
 
   return [
     ...committedWords.map((_, index) => round.targetWords[index] ?? ''),

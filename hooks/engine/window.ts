@@ -1,7 +1,6 @@
 import type { TypingCharCounts, TypingFold, TypingRound, TypingRoundRunning } from '../../types'
 
 import { addSampleTotals, scoreWord, totalSamples } from './stats'
-import { parseTyped } from './typed-text'
 
 /**
  * The window: a flow test lasts as long as the turn, and a session can last days. Past this many
@@ -34,7 +33,7 @@ export const foldOf = (round: TypingRound): TypingFold => (round.phase === 'read
 export const totalTargetWords = (round: TypingRound): number => foldOf(round).words + round.targetWords.length
 
 /** Committed words of the whole test, folded ones included. */
-export const committedWordCount = (round: TypingRoundRunning): number => round.fold.words + parseTyped(round.typed).committedWords.length
+export const committedWordCount = (round: TypingRoundRunning): number => round.fold.words + round.typedWords.length
 
 /** The letter pairs of a word, in order: "the" is "th" and "he". */
 export const bigramsOf = (word: string): readonly string[] =>
@@ -58,41 +57,40 @@ const addCharCounts = (first: TypingCharCounts, second: TypingCharCounts): Typin
   missed: first.missed + second.missed,
 })
 
-/** One committed word with the spaces around it, read from a given position (sticky). */
-const COMMITTED_WORD = / *[^ ]+ +/y
+/** Characters of the first `wordCount` committed words, each with its space. O(words): once per committed word. */
+const committedLength = (typedWords: readonly string[], wordCount: number): number =>
+  typedWords.slice(0, wordCount).reduce((sum, word) => sum + word.length + 1, 0)
 
 /** Folds the oldest committed words out of a long round. Only words wholly in the field's base: the field never changes them again. */
 const foldWords = (round: TypingRoundRunning): TypingRoundRunning => {
-  // The common case, after every word: one length check, nothing more.
-  if (round.fieldBaseLength <= FOLD_AT_CHARACTERS) {
+  const baseLength = committedLength(round.typedWords, round.fieldBaseWords) + round.fieldBasePartial
+  // The common case, after every word: one sum, nothing more.
+  if (baseLength <= FOLD_AT_CHARACTERS) {
     return round
   }
-  const fieldBase = round.typed.slice(0, round.fieldBaseLength)
   // Whole words from the start, as long as at least KEEP_CHARACTERS of committed text stay.
-  const foldableLength = round.fieldBaseLength - KEEP_CHARACTERS
+  const foldableLength = baseLength - KEEP_CHARACTERS
   let droppedLength = 0
   let foldCount = 0
-  for (;;) {
-    COMMITTED_WORD.lastIndex = droppedLength
-    const word = COMMITTED_WORD.exec(fieldBase)
-    if (word === null || droppedLength + word[0].length > foldableLength) {
+  while (foldCount < round.fieldBaseWords) {
+    const wordLength = (round.typedWords[foldCount] ?? '').length + 1
+    if (droppedLength + wordLength > foldableLength) {
       break
     }
-    droppedLength += word[0].length
+    droppedLength += wordLength
     foldCount += 1
   }
 
   if (foldCount === 0) {
     return round
   }
-  const committedInBase = parseTyped(fieldBase).committedWords
   const foldedTargets = round.targetWords.slice(0, foldCount)
-  const scores = committedInBase.slice(0, foldCount).map((typedWord, index) => scoreWord(typedWord, foldedTargets[index] ?? '', true))
+  const scores = round.typedWords.slice(0, foldCount).map((typedWord, index) => scoreWord(typedWord, foldedTargets[index] ?? '', true))
 
   return {
     ...round,
-    typed: round.typed.slice(droppedLength),
-    fieldBaseLength: round.fieldBaseLength - droppedLength,
+    typedWords: round.typedWords.slice(foldCount),
+    fieldBaseWords: round.fieldBaseWords - foldCount,
     targetWords: round.targetWords.slice(foldCount),
     fold: {
       ...round.fold,

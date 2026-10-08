@@ -48,9 +48,9 @@ export type TypingSampleTotals = {
  * and a session can last days: without the fold the round would grow without limit.
  */
 export type TypingFold = {
-  /** Committed words removed from the start of `typed` and `targetWords`. */
+  /** Committed words removed from the start of `typedWords` and `targetWords`. */
   readonly words: number
-  /** Characters removed from the start of `typed`: an input field drawn before a fold trims its base by the difference. */
+  /** Characters of committed text removed (each word with its space): where the next fold starts counting. */
   readonly droppedCharacters: number
   readonly chars: TypingCharCounts
   /** The folded words' share of the word characters wpm is calculated from. */
@@ -61,6 +61,8 @@ export type TypingFold = {
 }
 
 export type TypingRoundBase = {
+  /** The version of this shape (`ROUND_SHAPE`): a round kept in state over a reload from another version is dropped. */
+  readonly shape: number
   readonly roundId: number
   readonly mode: TypingMode
   /** The mode's count when the round was made (seconds for time, words for words); undefined for flow. */
@@ -70,10 +72,11 @@ export type TypingRoundBase = {
   /** Counts the input fields of this round; a new field (new key) starts empty after each word. */
   readonly fieldIndex: number
   /**
-   * How many characters of `typed` came before the current field's own text: the field's base is
-   * always the start of `typed`, so a length, not a second copy of that text.
+   * Where the current field's own text starts: after this many of `typedWords` (window-relative), and
+   * this many characters into the next word. The partial count is 0 but after a late field's keys.
    */
-  readonly fieldBaseLength: number
+  readonly fieldBaseWords: number
+  readonly fieldBasePartial: number
   /**
    * The text the current field is drawn holding: empty, or the current word without the keys
    * typed past its end. Fixed for the field's life, so a redraw never resets it.
@@ -93,7 +96,10 @@ export type TypingRoundReady = TypingRoundBase & { readonly phase: 'ready' }
 /** Typing in progress: everything the result is calculated from. */
 export type TypingRoundRunning = TypingRoundBase & {
   readonly phase: 'running'
-  readonly typed: string
+  /** The committed words as typed, each final once its space was typed; aligned with `targetWords`. */
+  readonly typedWords: readonly string[]
+  /** The word being typed: never longer than its target (keys past its end are left out). */
+  readonly currentWord: string
   readonly startedAt: number
   /** The last change of the field, keystroke or deletion: the end of the active time so far. */
   readonly lastInputAt: number
@@ -109,7 +115,7 @@ export type TypingRoundRunning = TypingRoundBase & {
   readonly bigramErrors: Readonly<Record<string, number>>
   /** One change of the field added more text than a person types at once: a paste, not typing. */
   readonly hasPastedText: boolean
-  /** The start of the test, folded out of `typed`, `targetWords` and `keystrokesPerSecond`. */
+  /** The start of the test, folded out of `typedWords`, `targetWords` and `keystrokesPerSecond`. */
   readonly fold: TypingFold
 }
 
@@ -139,7 +145,8 @@ export type TypingProgressSummary = {
 
 export type TypingRoundFinished = TypingRoundBase & {
   readonly phase: 'finished'
-  readonly typed: string
+  readonly typedWords: readonly string[]
+  readonly currentWord: string
   readonly ending: TypingRoundEnding
   readonly result: TypingResult
   readonly bigramErrors: Readonly<Record<string, number>>

@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PaneOpenArgs, Register, Timer, UiOpenResult } from 'claude-code'
 
 import type { TypingDayStanding, TypingPicks, TypingRound, TypingRoundFinished, TypingRoundReady, TypingSettings } from '../types'
-import { bandKind, isActive, keepsRound, roundAfter } from './engine/lifecycle'
+import { bandKind, isActive, keepsRound, readableRound, roundAfter } from './engine/lifecycle'
 import type { RoundNeed } from './engine/lifecycle'
 import { DEFAULT_WORD_LIST } from './engine/modes'
 import {
@@ -316,10 +316,7 @@ const handleInput = (dollar: Dollar, field: FieldAsDrawn, fieldText: string): vo
 
   void replaceRound(dollar, round =>
     isActive(round) && round.roundId === field.roundId
-      ? applyFieldInput(round, field.fieldIndex, field.fieldBaseLength, fieldText, now, {
-          fieldBaseDropped: field.fieldBaseDropped,
-          words: wordListFor(round.wordList).words,
-        })
+      ? applyFieldInput(round, field.field, fieldText, now, wordListFor(round.wordList).words)
       : round,
   )
 }
@@ -468,6 +465,8 @@ const syncSession = async (dollar: Dollar): Promise<void> => {
   const pane = await findGamePane(dollar)
   await update(dollar, isGameOpenAtom, () => pane !== undefined)
   await setPaneFocused(dollar, pane?.isFocused ?? true)
+  // A reload keeps the round, but one made by a version with another round shape cannot be read.
+  await update(dollar, roundAtom, readableRound)
 
   // A reload keeps the round; a reset leaves none, and an open pane would stay empty.
   if (pane !== undefined && (await read(dollar, roundAtom)) === null) {

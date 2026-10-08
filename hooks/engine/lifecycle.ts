@@ -1,5 +1,7 @@
 import type { TypingRound, TypingRoundReady, TypingRoundRunning } from '../../types'
 
+import { ROUND_SHAPE } from './round'
+
 /**
  * When a round lives and goes, as plain rules: the shell holds the facts (is the game open, is
  * Claude working) and applies the answer. A test in progress always outlives the turn and the pane
@@ -35,6 +37,9 @@ export const roundAfter = (round: TypingRound | null, event: RoundEvent): Typing
       return null
   }
 }
+
+/** A round kept in state over a reload stays only when this version can read it: the same shape. */
+export const readableRound = (round: TypingRound | null): TypingRound | null => (round?.shape === ROUND_SHAPE ? round : null)
 
 /**
  * Why the shell wants a round: the invitation after a turn's delay, new settings, the game opened,
