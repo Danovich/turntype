@@ -1,0 +1,14 @@
+{
+  "name": "turntype",
+  "description": "turntype: a typing test for the time while Claude works.",
+  "owner": {
+    "name": "Dan",
+    "url": "https://github.com/Danovich"
+  },
+  "plugins": [
+    {
+      "name": "turntype",
+      "source": "./"
+    }
+  ]
+}

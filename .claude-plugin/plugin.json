@@ -1,11 +1,21 @@
 {
   "name": "turntype",
-  "version": "0.10.0",
+  "version": "1.0.0",
   "description": "A typing challenge while Claude works: press 1 in an empty prompt, or run /type.",
   "author": {
-    "name": "Dan"
+    "name": "Dan",
+    "url": "https://github.com/Danovich"
   },
+  "homepage": "https://github.com/Danovich/turntype",
+  "repository": "https://github.com/Danovich/turntype",
   "license": "GPL-3.0-or-later",
+  "keywords": [
+    "typing",
+    "typing-test",
+    "wpm",
+    "game",
+    "mod"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "adaptive": {

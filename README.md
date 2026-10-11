@@ -29,10 +29,13 @@ Here's the idea. You send Claude a prompt, then you wait. You could scroll Twitt
 
 You need **Claude Code 2.1.296 or later**, in the terminal. The Desktop app should work too, but nobody has tested it there yet ([notes](#notes-and-limitations)).
 
+Type this at the Claude Code prompt:
+
 ```text
 /plugin install turntype --marketplace Danovich/turntype
-/reload-plugins
 ```
+
+Answer `y` to add the marketplace, then press Enter for the user scope. turntype is active right away, in this session and every one after.
 
 To try it for one session without installing it:
 
