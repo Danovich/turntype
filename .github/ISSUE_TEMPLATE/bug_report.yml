@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in turntype doesn't work as the README says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The mods API changes between Claude Code releases, so the version and where you ran it matter most.
+  - type: input
+    id: claude-code-version
+    attributes:
+      label: Claude Code version
+      description: The output of `claude --version`.
+      placeholder: 2.1.296
+    validations:
+      required: true
+  - type: input
+    id: turntype-version
+    attributes:
+      label: turntype version
+      description: From `/plugin`, or `version` in `.claude-plugin/plugin.json`.
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where you ran it
+      options:
+        - Terminal
+        - Terminal, fullscreen (the game docked as a sidebar)
+        - Claude Code Desktop app
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: OS and terminal
+      placeholder: macOS 26, iTerm2 3.6
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead. A screenshot of the pane helps.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to see it again
+      placeholder: |
+        1. Send Claude a long prompt
+        2. Press 1 when the invitation shows
+        3. ...
