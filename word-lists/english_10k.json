@@ -1,4 +1,7 @@
 {
+  "name": "english_10k",
+  "noLazyMode": true,
+  "orderedByFrequency": true,
   "words": [
     "the",
     "of",
