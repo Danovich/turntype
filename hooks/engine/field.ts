@@ -35,7 +35,7 @@ const endOf = (round: TypingRound): Pick<TypingField, 'baseWord' | 'basePartial'
   round.phase === 'ready' ? { baseWord: 0, basePartial: 0 } : { baseWord: round.scored.words, basePartial: round.currentWord.length }
 
 /** A fresh field (a new key) holding the round's text after the field's base: the one drawn before showed keys left out. */
-const freshField = (field: TypingField, round: TypingRound): TypingField => {
+export const freshField = (field: TypingField, round: TypingRound): TypingField => {
   const [typedWords, currentWord] = typedOf(round)
 
   return { ...field, index: field.index + 1, value: textFromWord(typedWords, currentWord, field.baseWord - droppedWords(round)).slice(field.basePartial) }

@@ -27,6 +27,8 @@ export type PickerActions = {
   readonly onChoose: (chosen: TypingSettings) => void
   /** Opens a group's options, or closes them when they are open; chooses nothing. */
   readonly onToggle: (group: Exclude<OpenOptions, null>) => void
+  /** The mode in use pressed: nothing to choose, so any open group closes and the field takes the keys. */
+  readonly onBackToField: () => void
 }
 
 /** One option to pick: the one in use yellow text (pressing it would change nothing), any other a dim button. */
@@ -75,13 +77,6 @@ export const settingsPicker = (elements: PickerElements, props: PickerProps, act
   const { Box, Button, Text } = elements
   const { settings, palette, openOptions, wordListNames } = props
   const choose = (change: Partial<TypingSettings>) => () => actions.onChoose({ ...settings, ...change })
-  // A mode in use with nothing to pick: its press closes an open group instead.
-  const closeOpen = () => {
-    if (openOptions !== null) {
-      actions.onToggle(openOptions)
-    }
-  }
-
   const listOptions = wordListOrder(wordListNames)
     .filter(name => name !== settings.wordList)
     .map(name => pickOption(elements, palette, `pick-list-${name}`, name, false, choose({ wordList: name })))
@@ -91,7 +86,7 @@ export const settingsPicker = (elements: PickerElements, props: PickerProps, act
     const isInUse = settings.mode === mode
 
     if (!isCountedMode(mode)) {
-      return <Button key={`pick-${mode}`} label={label} plain dimColor={!isInUse} onPress={isInUse ? closeOpen : choose({ mode })} />
+      return <Button key={`pick-${mode}`} label={label} plain dimColor={!isInUse} onPress={isInUse ? actions.onBackToField : choose({ mode })} />
     }
     const isOpen = openOptions === mode
     const options = MODES[mode].count.presets.map(count =>

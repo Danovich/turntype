@@ -29,8 +29,13 @@ export const ROUND_SHAPE = 5
 const EMPTY_SAMPLES = { count: 0, sum: 0, sumOfSquares: 0 } as const
 const FIRST_SECOND = { index: 0, keystrokes: 0 } as const
 
-const INITIAL_ENDLESS_WORDS = 40
+const INITIAL_ENDLESS_WORDS = 60
 const LOOKAHEAD_WORDS = 20
+/** Two lines of `lineWidth` cells hold about `lineWidth / 3` words of six cells (a word and its space). */
+const CELLS_PER_WORD_AHEAD = 3
+
+/** Words to keep ahead of the current one: enough to fill the two lines on show at this width. */
+const wordsAheadFor = (lineWidth: number): number => Math.max(LOOKAHEAD_WORDS, Math.ceil(lineWidth / CELLS_PER_WORD_AHEAD))
 /**
  * The most text one change of the field adds while a person types: one key, or a few the host
  * coalesced in a fast burst. More is a paste, and a pasted test can never be a personal best.
@@ -255,7 +260,8 @@ export const applyTyped = (
   const started = round.phase === 'running' ? round : undefined
   const startedAt = started?.startedAt ?? now
   const pausedMs = (started?.pausedMs ?? 0) + (started ? pausedPartOfGap(now - started.lastInputAt) : 0)
-  const needsMoreWords = isEndless(round.mode) && tally.committedCount + LOOKAHEAD_WORDS > round.targetWords.length
+  const wordsAhead = wordsAheadFor(lineWidth)
+  const needsMoreWords = isEndless(round.mode) && tally.committedCount + wordsAhead > round.targetWords.length
   const running: TypingRoundRunning = {
     shape: round.shape,
     roundId: round.roundId,
@@ -267,7 +273,7 @@ export const applyTyped = (
     wordList: round.wordList,
     phase: 'running',
     targetWords: needsMoreWords
-      ? [...round.targetWords, ...pickWords(words, LOOKAHEAD_WORDS, round.targetWords.at(-1), round.focusBigrams)]
+      ? [...round.targetWords, ...pickWords(words, wordsAhead, round.targetWords.at(-1), round.focusBigrams)]
       : round.targetWords,
     typedWords,
     currentWord,

@@ -114,22 +114,29 @@ describe('turntype', () => {
       expect(await pane.find({ type: 'Text', text: /Claude is done/ })).toBeDefined()
 
       await pane.input({ key: 'r1-f2', text: `#${thirdWord.slice(1)}`, kind: 'submit' })
-      expect(await pane.find({ type: 'Text', text: /^wpm$/ })).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: /^\d+ wpm$/ })).toBeDefined()
       expect(await pane.find({ type: 'Text', text: /% accuracy$/ })).toBeDefined()
-
-      // The character counts wait behind "details".
-      expect(await pane.find({ type: 'Text', text: /wrong 1/ })).toBeUndefined()
-      await pane.press({ key: 'details' })
-      expect(await pane.find({ type: 'Text', text: /wrong 1 ⋅ extra 0 ⋅ missed 0/ })).toBeDefined()
 
       // A flow test of a few seconds is saved for today, but can never be a personal best.
       expect(await pane.find({ type: 'Text', text: 'not a personal best try: under 15 s' })).toBeDefined()
       expect(await pane.find({ type: 'Text', text: /^today 1 test$/ })).toBeDefined()
+
+      // The character counts wait behind "details", in the trend row's place.
+      expect(await pane.find({ type: 'Text', text: /wrong 1/ })).toBeUndefined()
+      // The card takes no press in its first second.
+      await clock.advance(1000)
+      await pane.press({ key: 'details' })
+      expect(await pane.find({ type: 'Text', text: /wrong 1 ⋅ extra 0 ⋅ missed 0/ })).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: /^today 1 test$/ })).toBeUndefined()
       // One key per part: no fair result yet, but today's total holds the test.
       expect(savedValues.get('history')).toEqual([])
       expect(Object.values(savedValues.get('daily') as Record<string, unknown>)).toMatchObject([{ tests: 1 }])
 
-      await pane.press({ key: 'again' })
+      // The card takes no press in its first second.
+      await clock.advance(1000)
+      const cardField = (await pane.find({ type: 'Input' }))?.key ?? ''
+      expect(cardField.startsWith('card-')).toBe(true)
+      await pane.input({ key: cardField, text: '', kind: 'submit' })
       expect(await pane.find({ type: 'Input', key: 'r2-f0' })).toBeDefined()
       await pane.unmount()
       await band.unmount()
@@ -147,6 +154,8 @@ describe('turntype', () => {
     const pane = await $.ui.mount({ plugin: 'turntype', surface: 'terminal', component: 'Pane', requestId: 'turntype', props: PANE_PROPS })
     await pane.input({ key: 'r1-f0', text: 'x', kind: 'change' })
     await pane.input({ key: 'r1-f0', text: 'x', kind: 'submit' })
+    // The card takes no press in its first second.
+    await clock.advance(1000)
     await pane.press({ key: 'close' })
     await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 1, isAborted: false, turnId: 'turn-1' })
 

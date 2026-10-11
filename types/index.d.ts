@@ -192,6 +192,8 @@ declare module 'claude-code' {
       isPaneFocused: boolean
       /** The result card shows its second line of stats (raw, consistency, characters). */
       isDetailsShown: boolean
+      /** Bumped by each key on the result card: its field's key, so the field is drawn empty again. */
+      cardField: number
       /** The toolbar group showing its options (the word lists, or a mode's counts); null: all closed. */
       openOptions: 'list' | TypingCountedMode | null
       /** Personal best wpm per configuration key, loaded from the store: the live vs-PB mark reads it. */

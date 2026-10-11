@@ -11,21 +11,20 @@ import { activeElapsedMs, isIdle, timeLimitMs } from '../engine/timing'
 import type { Palette } from './palette'
 import { settingsPicker } from './picker'
 import type { PickerActions, PickerProps } from './picker'
-import { formatClock, ONE_ROW, progressLabel, ROW_GAP } from './shared'
+import { formatClock, ONE_ROW, progressLabel, rule } from './shared'
 import type { ActiveRound, GameElements } from './shared'
 
 /**
  * How each letter of the words rows is drawn: the target letter, styled by how it was typed. Text
- * still to type is dim; letters typed right white, wrong ones red; letters skipped in a finished word
- * dim. A yellow block on the next character is where the next key lands. A word with a mistake is
- * underlined (`isInErrorWord`, added per run): in its letters' colors, as a terminal draws it.
+ * still to type is dim; letters typed right white; a mistake red, a wrong letter or one a finished
+ * word went without. The next character to type is yellow and underlined: the only underline.
  */
 const letterTextPropsOf = (palette: Palette): Record<LetterStyle, TextProps> => ({
   [LETTER_STYLE.correct]: {},
   [LETTER_STYLE.incorrect]: { color: palette.error },
-  [LETTER_STYLE.missed]: { dimColor: true },
+  [LETTER_STYLE.missed]: { color: palette.error },
   [LETTER_STYLE.untyped]: { dimColor: true },
-  [LETTER_STYLE.caret]: { color: palette.warning, inverse: true },
+  [LETTER_STYLE.caret]: { color: palette.warning, underline: true },
 })
 
 // The props of the last palette drawn with: made once per theme, not on every draw.
@@ -39,8 +38,8 @@ const letterTextProps = (palette: Palette): Record<LetterStyle, TextProps> => {
   return letterPropsCache.props
 }
 
-/** Three lines of words in every phase: the first key changes nothing above the field. */
-const WORD_LINE_COUNT = 3
+/** Two lines of words in every phase, the current one and the next: the first key changes nothing above the field. */
+const WORD_LINE_COUNT = 2
 /** What Enter does, drawn by the field after its text: `⏎ finish`. */
 const SUBMIT_LABEL = 'finish'
 /**
@@ -56,6 +55,8 @@ export type GameViewProps = {
   /** The pane body's width: the word lines wrap to it. */
   readonly bodyColumns: number
   readonly isFocused: boolean
+  /** A turn of Claude's runs: a flow test begun without one has no end but Enter. */
+  readonly isClaudeWorking: boolean
   readonly now: number
   /** The colors for the person's Claude Code theme. */
   readonly palette: Palette
@@ -88,16 +89,22 @@ const stat = ({ Box, Text }: Pick<GameElements, 'Box' | 'Text'>, text: string, p
 
 /**
  * Last on the status row, so a narrow pane cuts it first: Esc, or that Claude is done and how to
- * end. Flow ends with the word; time and words end on Enter, the field's own `⏎ finish`.
+ * end. Flow ends with the word once Claude finishes during it; a flow test begun with Claude idle
+ * (the turn already over, or none) has no end of its own, so it says Enter ends it.
  */
-const keyHint = ({ Text }: Pick<GameElements, 'Text'>, round: TypingRoundRunning, palette: Palette) =>
-  round.isClaudeDone ? (
-    <Text color={palette.success} wrap={ONE_ROW}>
-      {`∘ Claude is done ⋅ ${MODES[round.mode].endsWhen === 'claudeDone' ? 'finish the word' : '⏎ finish'}`}
-    </Text>
-  ) : (
-    <Text dimColor wrap={ONE_ROW}>esc: hide</Text>
-  )
+const keyHint = ({ Text }: Pick<GameElements, 'Text'>, round: TypingRoundRunning, isClaudeWorking: boolean, palette: Palette) => {
+  const endsWithWord = MODES[round.mode].endsWhen === 'claudeDone'
+
+  if (round.isClaudeDone || (endsWithWord && !isClaudeWorking)) {
+    return (
+      <Text color={palette.success} wrap={ONE_ROW}>
+        {`∘ Claude is done ⋅ ${endsWithWord && round.isClaudeDone ? 'finish the word' : '⏎ finish'}`}
+      </Text>
+    )
+  }
+
+  return <Text dimColor wrap={ONE_ROW}>esc: hide</Text>
+}
 
 /** The clock and live wpm of a test in play: `0:12  52 wpm`, the wpm colored against the personal best. */
 const pace = (elements: Pick<GameElements, 'Box' | 'Text'>, round: TypingRoundRunning, now: number, palette: Palette) => {
@@ -109,28 +116,33 @@ const pace = (elements: Pick<GameElements, 'Box' | 'Text'>, round: TypingRoundRu
   return [stat(elements, clock, { dimColor: true }), stat(elements, `${wpm} wpm`, { color: pbColor(activeMs, wpm, round.pbWpm, palette), bold: true })]
 }
 
-/** The status after the field: `0:12  52 wpm  7 words  esc: hide`, or `paused ⋅ type to resume` in place of the pace. */
-const liveStatus = ({ Box, Text }: Pick<GameElements, 'Box' | 'Text'>, round: ActiveRound, now: number, palette: Palette) => {
-  // Before the first key the field itself says "start typing"; after it, only the weak pairs, if any.
-  if (round.phase === 'ready') {
-    return round.focusBigrams.length > 0 ? <Text dimColor wrap={ONE_ROW}>{`your weak pairs: ${round.focusBigrams.join(' ')}`}</Text> : null
-  }
+/** Before the first key, beside the field: the weak pairs this test practices, if any. */
+const weakPairs = ({ Text }: Pick<GameElements, 'Text'>, round: ActiveRound) =>
+  round.phase === 'ready' && round.focusBigrams.length > 0 ? <Text dimColor wrap={ONE_ROW}>{`your weak pairs: ${round.focusBigrams.join(' ')}`}</Text> : null
+
+/**
+ * The status under the field, on its own row so it never moves as the word grows: `0:12  52 wpm
+ * 7 words  esc: hide`, or `paused ⋅ type to resume` in place of the pace.
+ */
+const liveStatus = ({ Box, Text }: Pick<GameElements, 'Box' | 'Text'>, round: TypingRoundRunning, props: GameViewProps) => {
+  const { now, palette } = props
   const lead = isIdle(round, now) ? [stat({ Box, Text }, 'paused ⋅ type to resume', { dimColor: true })] : pace({ Box, Text }, round, now, palette)
 
   return (
     <Box flexDirection="row" columnGap={2}>
       {lead}
       {stat({ Box, Text }, progressLabel(round), { dimColor: true })}
-      {keyHint({ Text }, round, palette)}
+      {keyHint({ Text }, round, props.isClaudeWorking, palette)}
     </Box>
   )
 }
 
 /**
- * The pane before and during a test, nine rows: three word lines, the field with the status
- * after it, then the toolbar before the first key or an empty row. The field keeps its row
- * and its place in the tree, and is drawn before every Button: the toolbar going at the first key
- * must not take the focus ring from it.
+ * The pane before and during a test, five rows: two word lines, a dashed rule, the field, then the
+ * toolbar before the first key or the status once the test runs. The field has its row to itself
+ * (the weak pairs beside it before the first key), so it grows and nothing else moves. It keeps
+ * its place in the tree and is drawn before every Button: the toolbar going at the first key must
+ * not take the focus ring from it.
  */
 export const gameView = (elements: GameElements, round: ActiveRound, field: TypingField, props: GameViewProps, actions: GameActions) => {
   const { Box, Button, Input, Text } = elements
@@ -140,20 +152,20 @@ export const gameView = (elements: GameElements, round: ActiveRound, field: Typi
   const letterProps = letterTextProps(props.palette)
 
   return (
-    <Box flexDirection="column" rowGap={ROW_GAP}>
-      <Box flexDirection="column" rowGap={ROW_GAP}>
-        {lines.map(line => (
-          <Box flexDirection="row">
-            {line.length === 0 ? <Text> </Text> : line.map(run => <Text {...letterProps[run.style]} underline={run.isInErrorWord}>{run.text}</Text>)}
-          </Box>
-        ))}
-      </Box>
+    <Box flexDirection="column">
+      {lines.map(line => (
+        <Box flexDirection="row">
+          {line.length === 0 ? <Text> </Text> : line.map(run => <Text {...letterProps[run.style]}>{run.text}</Text>)}
+        </Box>
+      ))}
+      {rule({ Text }, props.bodyColumns)}
       <Box flexDirection="row" columnGap={2}>
         <Input
           key={fieldKey(field)}
-          // In the field, before its own `⏎ finish`: what to do now, then what Enter does. The
-          // first key replaces it. Without the keys, the way back to them.
-          placeholder={props.isFocused ? FOCUSED_PLACEHOLDER : UNFOCUSED_PLACEHOLDER}
+          // In the field, before its own `⏎ finish`: what to do now, then what Enter does, until
+          // the first key; the empty field of each next word says nothing. Without the keys, the
+          // way back to them.
+          placeholder={props.isFocused ? (round.phase === 'ready' ? FOCUSED_PLACEHOLDER : undefined) : UNFOCUSED_PLACEHOLDER}
           // Empty for a fresh field; the word as cut for one drawn after keys past its end.
           value={field.value === '' ? undefined : field.value}
           submitLabel={SUBMIT_LABEL}
@@ -161,9 +173,13 @@ export const gameView = (elements: GameElements, round: ActiveRound, field: Typi
           onInput={text => actions.onInput(drawn, text, props.bodyColumns)}
           onSubmit={() => actions.onFinish(round.roundId)}
         />
-        {liveStatus({ Box, Text }, round, props.now, props.palette)}
+        {weakPairs({ Text }, round)}
       </Box>
-      {props.picker === undefined ? <Text> </Text> : settingsPicker({ Box, Button, Text }, props.picker, actions.picker)}
+      {round.phase === 'running'
+        ? liveStatus({ Box, Text }, round, props)
+        : props.picker === undefined
+          ? <Text> </Text>
+          : settingsPicker({ Box, Button, Text }, props.picker, actions.picker)}
     </Box>
   )
 }

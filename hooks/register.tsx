@@ -19,9 +19,9 @@ import {
   weakBigrams,
 } from './engine/progress'
 import type { ProgressPart, StoredProgress } from './engine/progress'
-import { applyFieldInput, fieldKey, gameWith } from './engine/field'
+import { applyFieldInput, drawnOf, fieldKey, freshField, gameWith } from './engine/field'
 import type { FieldAsDrawn } from './engine/field'
-import { createRound, expireRound, finishByPlayer } from './engine/round'
+import { createRound, expireRound, finishByPlayer, MAX_CHARACTERS_PER_INPUT } from './engine/round'
 import { DEFAULT_SETTINGS, parseDailyGoalMinutes, parseSavedPicks, parseTypingSettings, PICKED_SETTINGS_KEY, picksOf, settingsInUse } from './engine/settings'
 import { isIdle, isTimeUp } from './engine/timing'
 import { FALLBACK_WORD_LIST, isWordListName, parseWordList } from './engine/word-list'
@@ -55,6 +55,7 @@ const clockTickAtom = atom({ plugin: 'turntype', key: 'clockTick' } as const, 0)
 const isGameOpenAtom = atom({ plugin: 'turntype', key: 'isGameOpen' } as const, false)
 const isPaneFocusedAtom = atom({ plugin: 'turntype', key: 'isPaneFocused' } as const, true)
 const isDetailsShownAtom = atom({ plugin: 'turntype', key: 'isDetailsShown' } as const, false)
+const cardFieldAtom = atom({ plugin: 'turntype', key: 'cardField' } as const, 0)
 const NO_OPEN_OPTIONS: OpenOptions = null
 const openOptionsAtom = atom({ plugin: 'turntype', key: 'openOptions' } as const, NO_OPEN_OPTIONS)
 const NO_PERSONAL_BESTS: Readonly<Record<string, number>> = {}
@@ -310,9 +311,28 @@ const syncTicker = (dollar: Dollar, round: TypingRound | null): void => {
 }
 
 /**
+ * A test can end mid-word (time up, the last word): keys still on their way would press the result
+ * card's `a`, `x` and `d`. The card takes no press for this long after a test ends.
+ */
+const RESULT_LOCKOUT_MS = 1000
+
+// The clock time from which the result card takes presses. A hot reload starts it over: no lockout.
+let resultPressesFrom = 0
+
+/** A result card action, ignored while the card is new. `$.clock`, not Date.now(): a press is rare, and a test moves it. */
+const afterLockout = (dollar: Dollar, action: () => void) => (): void => {
+  void (async () => {
+    if ((await dollar.clock.now()) >= resultPressesFrom) {
+      action()
+    }
+  })()
+}
+
+/**
  * The one place a round changes: it runs the clock, and saves a test the moment it finishes. The
  * save follows the change to finished, seen inside the one update: a later update of a finished
- * round (its summary attached, a turn's end) never saves it again.
+ * round (its summary attached, a turn's end) never saves it again. The finish starts the result
+ * card's lockout, closed at once and timed once the clock answers.
  */
 const replaceGame = async (dollar: Dollar, change: (game: TypingGame | null) => TypingGame | null): Promise<void> => {
   let wasFinished = false
@@ -325,6 +345,8 @@ const replaceGame = async (dollar: Dollar, change: (game: TypingGame | null) => 
   syncTicker(dollar, round)
 
   if (round?.phase === 'finished' && !wasFinished) {
+    resultPressesFrom = Number.POSITIVE_INFINITY
+    resultPressesFrom = (await dollar.clock.now()) + RESULT_LOCKOUT_MS
     await recordProgress(dollar, round)
   }
 }
@@ -333,13 +355,27 @@ const replaceGame = async (dollar: Dollar, change: (game: TypingGame | null) => 
 const replaceRound = (dollar: Dollar, change: (round: TypingRound | null) => TypingRound | null): Promise<void> =>
   replaceGame(dollar, game => gameWith(game, change(game?.round ?? null)))
 
+// When the main agent's last turn ended (Date.now()), kept here as well as in the round. A key's
+// write still on its way can hide a running test from the turn's end, which then marks nothing; a
+// test that began before this moment, with no turn running since, is Claude done all the same.
+let claudeDoneAt: number | undefined
+
+/** The round with Claude done when it began before the last turn ended, whatever the state says. */
+const withClaudeDone = <R extends TypingRound>(round: R): R =>
+  round.phase === 'running' && !round.isClaudeDone && pendingTurnId === undefined && claudeDoneAt !== undefined && round.startedAt < claudeDoneAt
+    ? { ...round, isClaudeDone: true }
+    : round
+
 /** One change of a field, as it was drawn. Date.now() here, not $.clock.now(): one host call less on every key. */
 const handleInput = (dollar: Dollar, drawn: FieldAsDrawn, fieldText: string, lineWidth: number): void => {
   const now = Date.now()
 
   void replaceGame(dollar, game =>
     game !== null && isActive(game.round)
-      ? applyFieldInput(game, drawn, fieldText, now, { words: wordListFor(game.round.wordList).words, lineWidth })
+      ? applyFieldInput({ ...game, round: withClaudeDone(game.round) }, drawn, fieldText, now, {
+          words: wordListFor(game.round.wordList).words,
+          lineWidth,
+        })
       : game,
   )
 }
@@ -388,8 +424,8 @@ const ensureRound = async (dollar: Dollar, need: RoundNeed, given?: TypingSettin
 // back after a permission dialog, and handing them to the field after a pick.
 
 const GAME_PANE_ID = 'turntype'
-/** Every phase draws exactly this many rows, an empty row between each two, so the pane never changes height. */
-const GAME_PANE_ROWS = 9
+/** Every phase draws exactly this many rows, so the pane never changes height. */
+const GAME_PANE_ROWS = 5
 const GAME_PANE: PaneOpenArgs = { id: GAME_PANE_ID, title: 'turntype', focus: true, closeOnEscape: true, rows: GAME_PANE_ROWS }
 /** After a permission ask: how often to look whether the dialog gave the keys back. */
 const REFOCUS_POLL_MS = 400
@@ -399,6 +435,14 @@ const REFOCUS_GIVE_UP_MS = 60_000
 
 // A hot reload cancels the timer with the old environment.
 let refocusTimer: Timer | undefined
+// Where the pane was seated when last drawn: a move between `inline` and `dock` (a terminal widened
+// or narrowed past 110 columns in fullscreen) takes the keys from it.
+let lastPlacement: string | undefined
+// The ring is on one of the pane's Buttons (the toolbar, the card's): a letter typed there is no
+// Button's, so Claude Code hands it to the prompt with the keys. Kept by the ui.focus hook.
+let isRingOnButton = false
+// The width the words were last drawn at: a key caught on its way to the prompt is applied at it.
+let lastLineWidth = 80
 
 const findGamePane = async (dollar: Dollar) => (await dollar.ui.panes()).find(pane => pane.id === GAME_PANE_ID)
 
@@ -414,9 +458,12 @@ const setPaneFocused = async (dollar: Dollar, isFocused: boolean): Promise<void>
  * Says whether the pane is drawn: where nothing draws (the VS Code chat panel, `claude -p`) it is not.
  */
 const openGame = async (dollar: Dollar): Promise<UiOpenResult> => {
+  // Asked first, before any await: a press's open that comes after one counts as unasked, and
+  // after an Esc the pane then waits undrawn below 144 columns. The round follows at once.
+  const opening = dollar.ui.open(GAME_PANE)
   await ensureRound(dollar, 'open')
   await update(dollar, isGameOpenAtom, () => true)
-  const opened = await dollar.ui.open(GAME_PANE)
+  const opened = await opening
   // Focus is a request: text in the composer refuses it, and then the band keeps its way back.
   await setPaneFocused(dollar, (await findGamePane(dollar))?.isFocused ?? false)
 
@@ -429,9 +476,10 @@ const stopRefocus = (): void => {
 }
 
 /**
- * A permission dialog takes the keys from the game and hands them to the prompt when it closes.
- * Watch for that loss, then ask for the keys back until the pane has them: the engine grants it
- * only over an empty composer, so a prompt the person started to write keeps the keys.
+ * A permission dialog takes the keys from the game and hands them to the prompt when it closes, and
+ * so does the pane moving between inline and the dock. Watch for that loss, then ask for the keys
+ * back until the pane has them: the engine grants it only over an empty composer, so a prompt the
+ * person started to write keeps the keys.
  */
 const refocusAfterAsk = (dollar: Dollar): void => {
   stopRefocus()
@@ -462,6 +510,7 @@ const refocusAfterAsk = (dollar: Dollar): void => {
 
 // The mod's own $.ui.close does not reach its own ui.close hook, so reset the flag here too.
 const closeGame = async (dollar: Dollar): Promise<void> => {
+  isRingOnButton = false
   stopRefocus()
   await replaceRound(dollar, () => null)
   await update(dollar, isGameOpenAtom, () => false)
@@ -482,6 +531,41 @@ const focusField = async (dollar: Dollar): Promise<void> => {
       // No focus call (an old host): the pick still holds; Tab or a click reaches the field.
     }
   }
+}
+
+/** An element of the pane the keys type into: the game's field (`r1-f0`) or the card's (`card-...`). */
+const isFieldElement = (element: string | undefined): boolean => element !== undefined && /^(?:r\d+-f\d+|card-)/.test(element)
+
+/** Keys a person types: a few printable characters, as one edit or a burst. */
+const isTypedKeys = (text: string): boolean => text.length > 0 && text.length <= MAX_CHARACTERS_PER_INPUT && !/[\n\r\t]/.test(text)
+
+/**
+ * A key typed while the ring sat on a Button reached the prompt: it is the game's. Before the first
+ * key it starts the test in a fresh field holding it; on the result card it is a card key. Then the
+ * pane asks for the keys back (the composer is empty: the edit was not taken), the field first.
+ */
+const takeBackLeakedKeys = async (dollar: Dollar, text: string): Promise<void> => {
+  const game = await read(dollar, gameAtom)
+
+  if (game?.round.phase === 'finished') {
+    resultCardActions(dollar).onKey(text.slice(-1).toLowerCase())
+  } else if (game?.round.phase === 'ready') {
+    const now = Date.now()
+    await replaceGame(dollar, current => {
+      if (current === null || current.round.phase !== 'ready' || current.round.roundId !== game.round.roundId) {
+        return current
+      }
+      const typed = applyFieldInput(current, drawnOf(current.field), text, now, {
+        words: wordListFor(current.round.wordList).words,
+        lineWidth: lastLineWidth,
+      })
+
+      // The Input on screen never held these keys: a fresh one is drawn holding what the round took.
+      return typed.round === current.round ? typed : { ...typed, field: freshField(typed.field, typed.round) }
+    })
+  }
+  await dollar.ui.open(GAME_PANE)
+  await setPaneFocused(dollar, (await findGamePane(dollar))?.isFocused ?? false)
 }
 
 // ─── Session ─────────────────────────────────────────────────────────────────────────────────
@@ -525,6 +609,25 @@ const chooseSettings = async (dollar: Dollar, chosen: TypingSettings): Promise<v
   await focusField(dollar)
 }
 
+/** The result card's actions, each through the lockout; a key typed on the card is one of them or nothing. */
+const resultCardActions = (dollar: Dollar) => {
+  const onAgain = afterLockout(dollar, () => void ensureRound(dollar, 'again'))
+  const onClose = afterLockout(dollar, () => void closeGame(dollar))
+  const onToggleDetails = afterLockout(dollar, () => void update(dollar, isDetailsShownAtom, isShown => !isShown))
+  const keyActions: Readonly<Record<string, () => void>> = { a: onAgain, x: onClose, d: onToggleDetails }
+
+  return {
+    // Every key empties the card's field (a new key); a, x and d act.
+    onKey: (key: string) => {
+      void update(dollar, cardFieldAtom, index => index + 1)
+      keyActions[key]?.()
+    },
+    onAgain,
+    onClose,
+    onToggleDetails,
+  }
+}
+
 /** The toolbar as the pane draws it: the settings in use, the lists, which group is open. */
 const pickerProps = async (dollar: Dollar): Promise<PickerProps> => ({
   settings: await readSettings(dollar),
@@ -536,6 +639,8 @@ const pickerProps = async (dollar: Dollar): Promise<PickerProps> => ({
 const pickerActions = (dollar: Dollar): PickerActions => ({
   onChoose: chosen => void chooseSettings(dollar, chosen),
   onToggle: group => void update(dollar, openOptionsAtom, open => (open === group ? null : group)),
+  // A focused Button takes no letters: they would go to the prompt. Back to the field instead.
+  onBackToField: () => void update(dollar, openOptionsAtom, () => null).then(() => focusField(dollar)),
 })
 
 // ─── Hooks ───────────────────────────────────────────────────────────────────────────────────
@@ -605,6 +710,7 @@ export const register: Register = (on, options) => {
   on('ui.close', { id: GAME_PANE_ID }, async ($, e, next) => {
     const result = await next(e)
     stopRefocus()
+    isRingOnButton = false
     await update($, isGameOpenAtom, () => false)
     await replaceRound($, round => roundAfter(round, { kind: 'paneClosed', isTurnRunning: pendingTurnId !== undefined }))
 
@@ -616,6 +722,7 @@ export const register: Register = (on, options) => {
     const result = await next(e)
 
     if (result.deny === undefined) {
+      isRingOnButton = !isFieldElement(e.element)
       await setPaneFocused($, true)
     }
 
@@ -656,6 +763,7 @@ export const register: Register = (on, options) => {
 
     if (!e.agentId) {
       pendingTurnId = undefined
+      claudeDoneAt = Date.now()
       // The person writes the next prompt now: never take the keys from them.
       stopRefocus()
       const isGameOpen = await read($, isGameOpenAtom)
@@ -664,6 +772,18 @@ export const register: Register = (on, options) => {
 
     return result
   })
+
+  // A key that left a Button of the pane for the prompt is the game's: taken, and the keys go back.
+  // Every other edit of the prompt passes on after one module variable is read: no host call.
+  on('prompt.edit', ($, e, next) => {
+    if (!isRingOnButton || e.text !== '' || e.key?.ctrl || e.key?.meta || !isTypedKeys(e.inputText)) {
+      return next(e)
+    }
+    isRingOnButton = false
+    void takeBackLeakedKeys($, e.inputText)
+
+    return { text: e.text, cursor: e.cursor }
+  }).catch(($, e, next) => next(e))
 
   // The band: a one-line invitation, or the way back to an open pane that lost the keys.
   // Its digit hotkey also fires from an empty prompt.
@@ -702,8 +822,8 @@ export const register: Register = (on, options) => {
     return invitationBand(elements, round, daily, openFromBand)
   })
 
-  // The game pane: nine rows in every phase. Words, the field and live stats, then the toolbar
-  // before the first key; or the result card.
+  // The game pane: five rows in every phase. Words, the rule, the field and live stats, then the
+  // toolbar before the first key; or the result card.
   on('ui.render', { component: 'Pane', requestId: GAME_PANE_ID }, async ($, e, next) => {
     const game = await read($, gameAtom)
     const elements = $.ui.resolve(e)
@@ -711,19 +831,30 @@ export const register: Register = (on, options) => {
     if (game === null || !('Input' in elements)) {
       return next(e)
     }
-    const { round, field } = game
+    const { field } = game
+    const round = withClaudeDone(game.round)
+    const placement = e.props.placement
+    lastLineWidth = e.props.bodyColumns
+
+    // Moved inline ↔ dock mid-test: the keys go with the move, at once or a moment after this draw.
+    // Watch as after a dialog: they come back, or the watch stops once they stayed 3 s.
+    if (lastPlacement !== undefined && placement !== lastPlacement && isActive(round)) {
+      refocusAfterAsk($)
+    }
+    lastPlacement = placement
 
     if (round.phase === 'finished') {
       return resultCard(
         elements,
         round,
-        { isTerminal: e.surface === 'terminal', isDetailsShown: await read($, isDetailsShownAtom), palette, picker: await pickerProps($) },
         {
-          onAgain: () => void ensureRound($, 'again'),
-          onClose: () => void closeGame($),
-          onToggleDetails: () => void update($, isDetailsShownAtom, isShown => !isShown),
-          picker: pickerActions($),
+          bodyColumns: e.props.bodyColumns,
+          fieldKey: `card-r${round.roundId}-${await read($, cardFieldAtom)}`,
+          isDetailsShown: await read($, isDetailsShownAtom),
+          palette,
+          picker: await pickerProps($),
         },
+        { ...resultCardActions($), picker: pickerActions($) },
       )
     }
 
@@ -739,6 +870,7 @@ export const register: Register = (on, options) => {
       {
         bodyColumns: e.props.bodyColumns,
         isFocused: e.props.isFocused,
+        isClaudeWorking: pendingTurnId !== undefined,
         now: Date.now(),
         palette,
         // Only before the first key, where the toolbar is drawn: a key never reads the settings.

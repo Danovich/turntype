@@ -12,8 +12,10 @@ export type { ActiveRound } from '../engine/lifecycle'
 /** One row, never wrapped: a long row cut short keeps the pane height fixed. */
 export const ONE_ROW = 'truncate-end'
 
-/** An empty row between each two rows of the pane. */
-export const ROW_GAP = 1
+/** The dashed rule under the words, dim, as wide as the pane: one row, cut where the pane ends. */
+export const rule = ({ Text }: Pick<GameElements, 'Text'>, columns: number) => (
+  <Text dimColor wrap={ONE_ROW}>{'╌'.repeat(Math.max(1, columns))}</Text>
+)
 
 export const formatClock = (durationMs: number): string => {
   const totalSeconds = Math.floor(durationMs / 1000)

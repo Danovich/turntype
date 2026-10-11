@@ -17,7 +17,7 @@ import type { On, PaneOpenArgs } from 'claude-code'
 import { FALLBACK_WORD_LIST } from '../hooks/engine/word-list'
 
 const GAME = 'turntype'
-const PANE_ROWS = 9
+const PANE_ROWS = 5
 
 const BAND_PROPS = {
   hasSurvey: false,
@@ -149,6 +149,8 @@ const stubWorld = (on: On, storeEntries: Readonly<Record<string, unknown>> = {})
     return { value: { isPlaced: true } }
   })
   on('ui.close', (_, e) => (world.openPaneIds.delete(e.id), { value: undefined }))
+  // The prompt box beneath the mod: an edit splices its text in.
+  on('prompt.edit', (_, e) => ({ text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end), cursor: e.start + e.inputText.length }))
   on('ui.panes', () => {
     if (world.isPaneListBroken) {
       throw new Error('panes down')
@@ -228,15 +230,42 @@ type PaneHandle = Mounted<Surface, 'Pane'>
 /** The field on show, as the person sees it: its key says the round and the field (`r1-f2`). */
 const fieldKey = async (pane: PaneHandle): Promise<string | undefined> => (await pane.find({ type: 'Input' }))?.key
 
-/** The word to type next, read off the words rows from the yellow caret on its first letter to the next space. */
+/** The word to type next, read off the words rows from the yellow underlined caret on its first letter to the next space. */
 const currentWord = async (pane: PaneHandle): Promise<string> => {
   const texts = await pane.findAll({ type: 'Text' })
-  const caret = texts.findIndex(found => found.props['inverse'] === true)
+  const caret = texts.findIndex(found => found.props['underline'] === true)
 
   return caret < 0 ? '' : texts.slice(caret).map(found => found.text).join('').split(' ')[0] ?? ''
 }
 
-const isFinished = async (pane: PaneHandle): Promise<boolean> => (await pane.find({ type: 'Button', key: 'again' })) !== undefined
+/** The result card's field, which holds the keys on the card: its key starts `card-`. */
+const cardField = async (pane: PaneHandle): Promise<string | undefined> => {
+  const key = (await pane.find({ type: 'Input' }))?.key
+
+  return key?.startsWith('card-') ? key : undefined
+}
+
+const isFinished = async (pane: PaneHandle): Promise<boolean> => (await cardField(pane)) !== undefined
+
+/** A key typed on the result card, into its field. */
+const cardKey = async (pane: PaneHandle, text: string): Promise<void> => {
+  const key = await cardField(pane)
+
+  if (key === undefined) {
+    throw new Error('no result card on show')
+  }
+  await pane.input({ key, text, kind: 'change' })
+}
+
+/** Enter on the result card: again. */
+const pressAgain = async (pane: PaneHandle): Promise<void> => {
+  const key = await cardField(pane)
+
+  if (key === undefined) {
+    throw new Error('no result card on show')
+  }
+  await pane.input({ key, text: '', kind: 'submit' })
+}
 
 /** Types the word at the caret and a space into the field on show, one key per change, as a player does. */
 const typeNextWord = async (pane: PaneHandle, mistype = false): Promise<void> => {
@@ -307,6 +336,8 @@ describe('probe: the pane never changes height', () => {
       await typeNextWord(pane)
       expect(await isFinished(pane)).toBe(true)
       await expectPaneRows(pane, 'finished')
+      // The card takes no press in its first second.
+      await clock.advance(1000)
       await pane.press({ key: 'details' })
       await expectPaneRows(pane, 'finished, details shown')
     })
@@ -359,6 +390,8 @@ describe('probe: the pane never changes height', () => {
 
     // The summary attached, Claude's turn ending, details shown: each changes the finished round.
     await $.turn.complete({ ...TURN_DONE, turnId: 'turn-1' })
+    // The card takes no press in its first second.
+    await clock.advance(1000)
     await pane.press({ key: 'details' })
     // Saved twice, today's total would count two tests.
     expect(Object.values(world.saved.get('daily') as Record<string, { tests: number }>).map(day => day.tests)).toEqual([1])
@@ -378,22 +411,213 @@ describe('probe: the pane never changes height', () => {
   })
 })
 
+describe('probe: the field and the lines', () => {
+  test('the field says "start typing" before the first key only; the field of each next word is empty', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+
+    expect((await pane.find({ type: 'Input' }))?.props['placeholder']).toBe(' start typing')
+    await typeNextWord(pane)
+    expect((await pane.find({ type: 'Input' }))?.props['placeholder']).toBeUndefined()
+  })
+
+  test('a flow test keeps both lines of words full as it goes, at a wide pane too', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await pane.redraw({ ...PANE_PROPS, bodyColumns: 200 })
+    // The second row of words, read as text: the Box of letter runs after the first.
+    const textOf = (node: unknown): string =>
+      typeof node === 'string' ? node : isNode(node) ? childrenOf(node).flat().map(textOf).join('') : ''
+    const secondLine = async (): Promise<string> => {
+      const root = await pane.drawn()
+
+      return isNode(root) ? textOf(childrenOf(root).flat()[1]) : ''
+    }
+
+    for (let index = 0; index < 30; index++) {
+      await typeNextWord(pane)
+      expect((await secondLine()).trimEnd().length, `second line after word ${index + 1}`).toBeGreaterThan(200 - 30)
+    }
+  })
+})
+
+describe('probe: keys that leave a Button for the prompt', () => {
+  const PERSON = { kind: 'person' } as const
+  type PromptEdit = { origin: { kind: 'composer' }; text: string; cursor: number; start: number; end: number; inputText: string; key?: { key: string; ctrl?: true } }
+  const typedInPrompt = (inputText: string): PromptEdit => ({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText })
+  /** The person typing in the prompt box: the kit raises `prompt.edit`, which its `$` types do not list. */
+  const editPrompt = ($: Engine, edit: PromptEdit): Promise<{ text: string; cursor: number }> =>
+    ($.prompt as unknown as { edit: (args: PromptEdit) => Promise<{ text: string; cursor: number }> }).edit(edit)
+
+  test('before the first key: a letter typed on the toolbar starts the test in the field, not the prompt', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    const word = await currentWord(pane)
+    world.openCalls.length = 0
+
+    await $.ui.focus({ component: 'Pane', requestId: GAME, element: 'pick-time', origin: PERSON })
+    const box = await editPrompt($, typedInPrompt(word.slice(0, 1)))
+    expect(box).toMatchObject({ text: '', cursor: 0 })
+    // A fresh field holds the key; the keys are asked back; the rest of the word goes on in it.
+    expect(await fieldKey(pane)).toBe('r1-f1')
+    expect((await pane.find({ type: 'Input' }))?.props['value']).toBe(word.slice(0, 1))
+    expect(focusRequests(world)).toBeGreaterThan(0)
+    await pane.input({ key: 'r1-f1', text: `${word} `, kind: 'change' })
+    expect(await pane.find({ type: 'Text', text: /^1 word$/ })).toBeDefined()
+  })
+
+  test('the ring on the field, or no pane: an edit of the prompt is the prompt\'s', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+
+    await $.ui.focus({ component: 'Pane', requestId: GAME, element: 'r1-f0', origin: PERSON })
+    expect(await editPrompt($, typedInPrompt('h'))).toMatchObject({ text: 'h' })
+    expect(await fieldKey(pane)).toBe('r1-f0')
+
+    // Ring on a Button, then the game closed (x on the card): nothing is taken.
+    await typeNextWord(pane)
+    await pressEnter(pane)
+    await clock.advance(1000)
+    await $.ui.focus({ component: 'Pane', requestId: GAME, element: 'details', origin: PERSON })
+    await pane.press({ key: 'close' })
+    expect(await editPrompt($, typedInPrompt('h'))).toMatchObject({ text: 'h' })
+  })
+
+  test('text already in the prompt, a modifier, or a long paste: the prompt\'s', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    await openFromBand($, clock)
+    await $.ui.focus({ component: 'Pane', requestId: GAME, element: 'pick-time', origin: PERSON })
+
+    expect(await editPrompt($, { ...typedInPrompt('i'), text: 'h', cursor: 1, start: 1, end: 1 })).toMatchObject({ text: 'hi' })
+    expect(await editPrompt($, { ...typedInPrompt('c'), key: { key: 'c', ctrl: true } })).toMatchObject({ text: 'c' })
+    expect(await editPrompt($, typedInPrompt('a pasted line'))).toMatchObject({ text: 'a pasted line' })
+  })
+
+  test('on the result card: a letter typed on a Button is a card key', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    await pressEnter(pane)
+    await clock.advance(1000)
+
+    await $.ui.focus({ component: 'Pane', requestId: GAME, element: 'close', origin: PERSON })
+    expect(await editPrompt($, typedInPrompt('d'))).toMatchObject({ text: '' })
+    expect(await pane.find({ type: 'Button', key: 'details' })).toMatchObject({ props: { label: 'hide details' } })
+  })
+})
+
+describe('probe: the status row', () => {
+  test('once the test runs, the field has its row alone and the status is the row under it', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    await pane.input({ key: (await fieldKey(pane)) ?? '', text: 'ab', kind: 'change' })
+
+    const root = await pane.drawn()
+    const rows = isNode(root) ? childrenOf(root).flat() : []
+    const fieldRow = rows[3]
+    const statusRow = rows[4]
+    const textOf = (node: unknown): string =>
+      typeof node === 'string' ? node : isNode(node) ? childrenOf(node).flat().map(textOf).join(' ') : ''
+    expect(isNode(fieldRow) ? childrenOf(fieldRow).flat().filter(isNode).map(child => child.type) : []).toEqual(['Input'])
+    expect(textOf(statusRow)).toMatch(/1 word.*esc: hide/)
+  })
+})
+
 describe('probe: result card', () => {
-  test('terminal: wpm in block digits; desktop: plain', async ($, on) => {
+  test('the wpm is plain text on every surface, its rule as wide as the pane', async ($, on) => {
     const clock = mock.clock(on)
     stubWorld(on)
     const { pane } = await openFromBand($, clock, 'terminal')
     await typeNextWord(pane)
     await pressEnter(pane)
 
-    const digitTexts = (await pane.findAll({ type: 'Text', text: /^[█▀▄ ]*[█▀▄][█▀▄ ]*$/ })).map(found => found.text)
-    expect(digitTexts.length).toBe(3)
-    expect(new Set(digitTexts.map(row => row.length)).size).toBe(1)
+    expect(await pane.find({ type: 'Text', text: /^\d+ wpm$/ })).toBeDefined()
+    expect((await pane.find({ type: 'Text', text: /^╌+$/ }))?.text.length).toBe(PANE_PROPS.bodyColumns)
 
     await pane.unmount()
     const desktopPane = await $.ui.mount({ plugin: GAME, surface: 'desktop', component: 'Pane', requestId: GAME, props: PANE_PROPS })
-    expect(await desktopPane.find({ type: 'Text', text: /[█▀▄]/ })).toBeUndefined()
-    expect(await desktopPane.find({ type: 'Text', text: /^\d+$/ })).toBeDefined()
+    expect(await desktopPane.find({ type: 'Text', text: /^\d+ wpm$/ })).toBeDefined()
+  })
+
+  test('a new card takes no key in its first second: a, x, d and Enter do nothing, then all work', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    await pressEnter(pane)
+    expect(await isFinished(pane)).toBe(true)
+
+    // Keys still on their way when the test ended: none of them acts, typed or pressed.
+    await cardKey(pane, 'd')
+    await cardKey(pane, 'x')
+    await cardKey(pane, 'a')
+    await pane.press({ key: 'details' })
+    await pane.press({ key: 'close' })
+    await pressAgain(pane)
+    await clock.advance(999)
+    await cardKey(pane, 'a')
+    expect(await isFinished(pane)).toBe(true)
+    expect(await pane.find({ type: 'Button', key: 'details' })).toMatchObject({ props: { label: 'details' } })
+
+    // A second after the end the card answers.
+    await clock.advance(1)
+    await cardKey(pane, 'd')
+    expect(await pane.find({ type: 'Button', key: 'details' })).toMatchObject({ props: { label: 'hide details' } })
+    await cardKey(pane, 'a')
+    expect(await isFinished(pane)).toBe(false)
+    expect(await fieldKey(pane)).toBe('r2-f0')
+  })
+
+  test('the card field takes every key and is drawn empty again; a key it has no use for does nothing', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    await pressEnter(pane)
+    await clock.advance(1000)
+    const first = await cardField(pane)
+
+    await cardKey(pane, 'q')
+    const second = await cardField(pane)
+    expect(second).toBeDefined()
+    expect(second).not.toBe(first)
+    expect(await isFinished(pane)).toBe(true)
+    // Upper case is the same key; the field is drawn before every Button, so it holds the ring.
+    await cardKey(pane, 'D')
+    expect(await pane.find({ type: 'Button', key: 'details' })).toMatchObject({ props: { label: 'hide details' } })
+    // One word typed: "1 word", over two rows that leave the rule's place to the details.
+    expect(await pane.find({ type: 'Text', text: /⋅ 1 word ⋅/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^correct \d+ ⋅ wrong \d+ ⋅ extra \d+ ⋅ missed \d+$/ })).toBeDefined()
+    const types = (await pane.findAll({})).map(found => found.type)
+    expect(types.slice(0, types.indexOf('Input'))).not.toContain('Button')
+    await cardKey(pane, 'x')
+    expect(await pane.find({ type: 'Input' })).toBeUndefined()
+  })
+
+  test('each finished test starts its own lockout: a second test is locked again', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    await pressEnter(pane)
+    await clock.advance(1000)
+    await pressAgain(pane)
+
+    await typeNextWord(pane)
+    await pressEnter(pane)
+    await pressAgain(pane)
+    expect(await isFinished(pane)).toBe(true)
+    await clock.advance(1000)
+    await pressAgain(pane)
+    expect(await fieldKey(pane)).toBe('r3-f0')
   })
 
   test('a corrupt saved record starts fresh; the first fair result is the first personal best', async ($, on) => {
@@ -498,6 +722,8 @@ describe('probe: turns, close and reopen', () => {
     const { band, pane } = await openFromBand($, clock)
     await typeNextWord(pane)
     await pressEnter(pane)
+    // The card takes no press in its first second.
+    await clock.advance(1000)
     await pane.press({ key: 'close' })
     expect(world.openPaneIds.has(GAME)).toBe(false)
     expect(await band.find({ type: 'Button' })).toBeUndefined()
@@ -562,12 +788,16 @@ describe('probe: turns, close and reopen', () => {
     const { pane } = await openFromBand($, clock)
     await typeNextWord(pane)
     await pressEnter(pane)
-    await pane.press({ key: 'again' })
+    // The card takes no press in its first second.
+    await clock.advance(1000)
+    await pressAgain(pane)
     expect(await fieldKey(pane)).toBe('r2-f0')
 
     await typeNextWord(pane)
     await pressEnter(pane)
-    await pane.press({ key: 'again' })
+    // The card takes no press in its first second.
+    await clock.advance(1000)
+    await pressAgain(pane)
     expect(await fieldKey(pane)).toBe('r3-f0')
   })
 
@@ -581,6 +811,22 @@ describe('probe: turns, close and reopen', () => {
     expect(await pane.find({ type: 'Text', text: /Claude is done/ })).toBeUndefined()
     await $.turn.complete({ ...TURN_DONE, turnId: 'turn-1' })
     expect(await pane.find({ type: 'Text', text: '∘ Claude is done ⋅ finish the word' })).toBeDefined()
+  })
+
+  test('the turn ends while keys arrive: Claude done is never lost to a key written at the same time', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    const key = await fieldKey(pane)
+    await pane.input({ key: key ?? '', text: 'a', kind: 'change' })
+
+    // The turn's end and two keys, all at once, none awaited before the others start.
+    await Promise.all([
+      $.turn.complete({ ...TURN_DONE, turnId: 'turn-1' }),
+      pane.input({ key: key ?? '', text: 'ab', kind: 'change' }),
+      pane.input({ key: key ?? '', text: 'abc', kind: 'change' }),
+    ])
+    expect(await pane.find({ type: 'Text', text: /Claude is done/ })).toBeDefined()
   })
 
   test('Claude done in a time test: Enter ends it, not the word', async ($, on) => {
@@ -606,6 +852,70 @@ describe('probe: turns, close and reopen', () => {
     expect(await isFinished(pane)).toBe(true)
     // Complete, not ended early: only its shortness keeps it from being a personal best.
     expect(await pane.find({ type: 'Text', text: 'not a personal best try: under 15 s' })).toBeDefined()
+  })
+
+  test('a flow test begun with Claude idle says Enter ends it, and a space does not', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    await $.session.start(SESSION)
+    await $.command.run(TYPE_COMMAND)
+    const pane = await $.ui.mount({ plugin: GAME, surface: 'terminal', component: 'Pane', requestId: GAME, props: PANE_PROPS })
+
+    await typeNextWord(pane)
+    expect(await pane.find({ type: 'Text', text: '∘ Claude is done ⋅ ⏎ finish' })).toBeDefined()
+    await typeNextWord(pane)
+    expect(await isFinished(pane)).toBe(false)
+    await pressEnter(pane)
+    expect(await isFinished(pane)).toBe(true)
+    void clock
+  })
+
+  test('a flow test begun after the turn ended: the same, Enter ends it', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await $.turn.complete({ ...TURN_DONE, turnId: 'turn-1' })
+
+    await typeNextWord(pane)
+    await typeNextWord(pane)
+    expect(await isFinished(pane)).toBe(false)
+    expect(await pane.find({ type: 'Text', text: '∘ Claude is done ⋅ ⏎ finish' })).toBeDefined()
+  })
+
+  test('while Claude works a flow test says esc: hide; once the turn ends during it, finish the word', async ($, on) => {
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    expect(await pane.find({ type: 'Text', text: 'esc: hide' })).toBeDefined()
+    await $.turn.complete({ ...TURN_DONE, turnId: 'turn-1' })
+    expect(await pane.find({ type: 'Text', text: '∘ Claude is done ⋅ finish the word' })).toBeDefined()
+  })
+
+  test('a state write that lost Claude done: the mod still knows, and the next key writes it back', async ($, on) => {
+    // The turn's own write lands without the flag, as a write from a stale read would.
+    let isDroppingDone = false
+    on('state.set', { plugin: GAME, key: 'game' }, (_, e, next) => {
+      const game = e.value as { round: { phase: string; isClaudeDone: boolean } } | null
+      if (!isDroppingDone || game?.round.isClaudeDone !== true) {
+        return next(e)
+      }
+      isDroppingDone = false
+
+      return next({ ...e, value: { ...game, round: { ...game.round, isClaudeDone: false } } as never })
+    })
+    const clock = mock.clock(on)
+    stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+
+    isDroppingDone = true
+    await $.turn.complete({ ...TURN_DONE, turnId: 'turn-1' })
+    expect(isDroppingDone).toBe(false)
+    expect(await pane.find({ type: 'Text', text: '∘ Claude is done ⋅ finish the word' })).toBeDefined()
+
+    await typeNextWord(pane)
+    expect(await isFinished(pane)).toBe(true)
   })
 
   test('a survey holds the band: the mod yields', async ($, on) => {
@@ -656,6 +966,59 @@ describe('probe: focus after a permission ask', () => {
     world.isPaneFocused = false
     await clock.advance(5000)
     expect(focusRequests(world)).toBe(requestsBefore)
+  })
+
+  test('the pane moved to the dock mid-test without the keys: the mod gets them back', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    world.openCalls.length = 0
+
+    // The terminal widened past 110 columns in fullscreen: the engine seats the pane in the dock.
+    world.isPaneFocused = false
+    await pane.redraw({ ...PANE_PROPS, placement: 'dock', isFocused: false, bodyColumns: 60 })
+    await clock.advance(400)
+    expect(focusRequests(world)).toBeGreaterThan(0)
+    expect(world.isPaneFocused).toBe(true)
+  })
+
+  test('the keys go a moment after the move: the watch still gets them back', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    await typeNextWord(pane)
+    world.openCalls.length = 0
+
+    // The first draw in the new seat still has the keys; they go after it.
+    await pane.redraw({ ...PANE_PROPS, placement: 'dock', isFocused: true, bodyColumns: 60 })
+    world.isPaneFocused = false
+    await clock.advance(800)
+    expect(focusRequests(world)).toBeGreaterThan(0)
+    expect(world.isPaneFocused).toBe(true)
+  })
+
+  test('a move with the keys kept, or with no test in play, asks for nothing', async ($, on) => {
+    const clock = mock.clock(on)
+    const world = stubWorld(on)
+    const { pane } = await openFromBand($, clock)
+    world.openCalls.length = 0
+
+    // The keys stayed: the watch looks for 3 s, asks for nothing, and stops.
+    await pane.redraw({ ...PANE_PROPS, placement: 'dock', isFocused: true, bodyColumns: 60 })
+    await clock.advance(3600)
+    expect(focusRequests(world)).toBe(0)
+    world.isPaneFocused = false
+    await clock.advance(2000)
+    expect(focusRequests(world)).toBe(0)
+    world.isPaneFocused = true
+
+    await typeNextWord(pane)
+    await pressEnter(pane)
+    world.isPaneFocused = false
+    await pane.redraw({ ...PANE_PROPS, placement: 'inline', isFocused: false })
+    await clock.advance(2000)
+    expect(focusRequests(world)).toBe(0)
   })
 
   test('a mode that allows the call shows no dialog: the watch stops after 3 s and never grabs', async ($, on) => {
@@ -871,6 +1234,8 @@ describe('probe: symbols', () => {
     for (let index = 1; index < 10; index++) {
       await typeNextWord(pane)
     }
+    // The card takes no press in its first second.
+    await clock.advance(1000)
     await pane.press({ key: 'details' })
     seen.push(...(await drawnTexts(pane)), ...(await drawnTexts(band)))
 
@@ -1247,7 +1612,9 @@ describe('probe: every flow through the pane', () => {
     await clock.advance(1000)
 
     // Again, two words: 240 wpm, a new best and past 150.
-    await pane.press({ key: 'again' })
+    // The card takes no press in its first second.
+    await clock.advance(1000)
+    await pressAgain(pane)
     await typeNextWord(pane)
     await typeNextWord(pane)
     await realWait(1100)

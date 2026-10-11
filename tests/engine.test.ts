@@ -13,7 +13,6 @@ import { activeElapsedMs, isIdle } from '../hooks/engine/timing'
 import { parseTyped } from '../hooks/engine/typed-text'
 import { buildVisibleLines, LETTER_STYLE } from '../hooks/engine/layout'
 import { bandKind, keepsRound, readableGame, roundAfter } from '../hooks/engine/lifecycle'
-import { bigNumberRows } from '../hooks/engine/big-digits'
 import { resultToast } from '../hooks/view/shared'
 import { droppedWords, trimWindow } from '../hooks/engine/window'
 import { addScoredWords, addToSecond, EMPTY_SCORED, scoreWord, totalSamples } from '../hooks/engine/stats'
@@ -603,22 +602,23 @@ describe('layout', () => {
     return [typedWords, currentWord] as const
   }
   const lineTexts = (typed: string) =>
-    buildVisibleLines(WORDS, ...lineWords(typed), 8, 3).map(line => line.map(run => run.text).join('').trim())
+    buildVisibleLines(WORDS, ...lineWords(typed), 8, 2).map(line => line.map(run => run.text).join('').trim())
 
-  test('always three lines: the end of the text is padded, so the pane never changes height', async () => {
-    expect(lineTexts('aaa bbb ccc ddd eee ')).toEqual(['ccc ddd', 'eee fff', 'ggg'])
-    expect(lineTexts('aaa bbb ccc ddd eee fff ')).toEqual(['eee fff', 'ggg', ''])
+  test('always two lines: the end of the text is padded, so the pane never changes height', async () => {
+    expect(lineTexts('aaa bbb ccc ddd eee ')).toEqual(['eee fff', 'ggg'])
+    expect(lineTexts('aaa bbb ccc ddd eee fff ')).toEqual(['ggg', ''])
   })
 
-  test('the current word stays on the second line, with the line just typed above it', async () => {
-    expect(lineTexts('')).toEqual(['aaa bbb', 'ccc ddd', 'eee fff'])
-    expect(lineTexts('aaa bbb ')).toEqual(['aaa bbb', 'ccc ddd', 'eee fff'])
-    expect(lineTexts('aaa bbb ccc ddd ')).toEqual(['ccc ddd', 'eee fff', 'ggg'])
+  test('the current word\'s line is the first, the words ahead below it; a finished line moves out', async () => {
+    expect(lineTexts('')).toEqual(['aaa bbb', 'ccc ddd'])
+    expect(lineTexts('aaa b')).toEqual(['aaa bbb', 'ccc ddd'])
+    expect(lineTexts('aaa bbb ')).toEqual(['ccc ddd', 'eee fff'])
+    expect(lineTexts('aaa bbb ccc ddd ')).toEqual(['eee fff', 'ggg'])
   })
 
   // The run that holds the caret, by style: where the next key lands.
   const caretRuns = (typed: string) =>
-    buildVisibleLines(WORDS, ...lineWords(typed), 8, 3)
+    buildVisibleLines(WORDS, ...lineWords(typed), 8, 2)
       .flat()
       .filter(run => run.style === LETTER_STYLE.caret)
       .map(run => ({ text: run.text, style: run.style }))
@@ -632,12 +632,12 @@ describe('layout', () => {
     expect(caretRuns('aaa bbbb')).toEqual([{ text: ' ', style: LETTER_STYLE.caret }])
   })
 
-  // The styles of one word's letters on show, by the word's position in WORDS.
+  // The styles of one word's letters, by the word's position in WORDS: all on one wide line.
   const wordStyles = (typed: string, wordIndex: number) =>
-    buildVisibleLines(WORDS, ...lineWords(typed), 8, 3)
+    buildVisibleLines(WORDS, ...lineWords(typed), 40, 2)
       .flat()
       .flatMap(run => [...run.text].map(() => run.style))
-      .filter((_, cell) => Math.floor(cell / 4) === wordIndex % 2 && cell % 4 < 3)
+      .filter((_, cell) => Math.floor(cell / 4) === wordIndex && cell % 4 < 3)
 
   test('a word typed too long stays red once committed, as it was while typed', async () => {
     // "aaa" right, then "bbb" with extra letters: every letter of "bbb" red, before and after the space.
@@ -646,39 +646,18 @@ describe('layout', () => {
     expect(wordStyles('aaa bbbxx ', 0)).toEqual([LETTER_STYLE.correct, LETTER_STYLE.correct, LETTER_STYLE.correct])
   })
 
-  // Each word's underline, by the word's position in WORDS (each is 3 letters and a space).
-  const errorWords = (typed: string) =>
-    buildVisibleLines(WORDS, ...lineWords(typed), 8, 3)
-      .flat()
-      .flatMap(run => [...run.text].map(() => run.isInErrorWord))
-      .filter((_, cell) => cell % 4 < 3)
-      .filter((_, letter) => letter % 3 === 0)
-
-  test('a word is underlined only when it has a mistake; the space between words never is', async () => {
-    // aaa right ⋅ bbb with a wrong letter ⋅ ccc short (a letter skipped) ⋅ ddd current, on track.
-    expect(errorWords('aaa bxb cc dd').slice(0, 4)).toEqual([false, true, true, false])
-    // The current word slips: underlined at once.
-    expect(errorWords('aaa bx').slice(0, 2)).toEqual([false, true])
-    // The space after a word with a mistake is drawn without the underline.
-    const spaceRuns = buildVisibleLines(WORDS, ...lineWords('axa '), 8, 3).flat().filter(run => run.text.trim() === '')
-    expect(spaceRuns.length).toBeGreaterThan(0)
-    expect(spaceRuns.some(run => run.isInErrorWord)).toBe(false)
+  test('a letter a finished word went without is missed; the letters typed keep their look', async () => {
+    expect(wordStyles('aaa b ', 1)).toEqual([LETTER_STYLE.correct, LETTER_STYLE.missed, LETTER_STYLE.missed])
   })
 
   test('words that look alike are one run with their spaces: what is typed, the caret, what is ahead', async () => {
-    const runs = buildVisibleLines(WORDS, ...lineWords('aaa bbb '), 40, 3)[0] ?? []
+    const runs = buildVisibleLines(WORDS, ...lineWords('aaa bbb '), 40, 2)[0] ?? []
 
     expect(runs.map(run => ({ text: run.text, style: run.style }))).toEqual([
       { text: 'aaa bbb ', style: LETTER_STYLE.correct },
       { text: 'c', style: LETTER_STYLE.caret },
       { text: 'cc ddd eee fff ggg ', style: LETTER_STYLE.untyped },
     ])
-  })
-
-  test('big digits: three rows, three cells a digit and one between', async () => {
-    const rows = bigNumberRows(40)
-
-    expect(rows).toEqual(['█ █ █▀█', '▀▀█ █ █', '  █ █▄█'])
   })
 })
 
